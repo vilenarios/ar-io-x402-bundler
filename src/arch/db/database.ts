@@ -213,6 +213,17 @@ export interface Database {
 
   getX402PaymentByDataItemId(dataItemId: DataItemId): Promise<X402Payment | null>;
 
+  getX402PaymentByUploadId(uploadId: string): Promise<X402Payment | null>;
+
+  getX402PaymentsByUploadId(uploadId: string): Promise<X402Payment[]>;
+
+  getX402PaymentById(paymentId: string): Promise<X402Payment | null>;
+
+  linkX402PaymentToUploadId(
+    paymentId: string,
+    uploadId: string
+  ): Promise<void>;
+
   createX402Payment(params: {
     userAddress: string;
     userAddressType: string;
@@ -223,6 +234,7 @@ export interface Database {
     wincAmount: Winston;
     mode: 'payg' | 'topup' | 'hybrid';
     dataItemId?: DataItemId;
+    uploadId?: string; // For multipart uploads
     declaredByteCount?: number;
     payerAddress: string;
   }): Promise<X402Payment>;

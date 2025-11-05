@@ -327,6 +327,19 @@ export const multipartChunkMinSize = 1024 * 1024 * 5; // 5MiB - AWS minimum
 export const multipartChunkMaxSize = 1024 * 1024 * 500; // 500MiB // NOTE: AWS supports upto 5GiB
 export const multipartDefaultChunkSize = 25_000_000; // 25MB
 
+// Multipart Upload x402 Two-Stage Payment Configuration
+export const multipartDepositUSDC = process.env.MULTIPART_DEPOSIT_USDC
+  ? parseFloat(process.env.MULTIPART_DEPOSIT_USDC)
+  : 0.01; // $0.01 USD anti-spam deposit
+
+export const multipartUploadTTLHours = +(
+  process.env.MULTIPART_UPLOAD_TTL_HOURS ?? 24
+); // 24 hours default
+
+export const multipartMaxPerAddress = +(
+  process.env.MULTIPART_MAX_PER_ADDRESS ?? 10
+); // Max 10 concurrent uploads per address
+
 export const signatureTypeInfo: Record<number, SigInfo> = {
   [SignatureConfig.ARWEAVE]: {
     signatureLength: 512,

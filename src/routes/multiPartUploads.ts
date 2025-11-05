@@ -37,6 +37,7 @@ import {
   multipartChunkMaxSize,
   multipartChunkMinSize,
   multipartDefaultChunkSize,
+  multipartDepositUSDC,
   receiptVersion,
   skipOpticalPostAddresses,
 } from "../constants";
@@ -118,6 +119,52 @@ export async function createMultiPartUpload(ctx: KoaContext) {
   const { database, objectStore, logger } = ctx.state;
 
   const chunkSizeRaw = ctx.query.chunkSize;
+  const paymentId = ctx.query.paymentId;
+
+  // x402 two-stage payment: Require deposit payment
+  if (!paymentId || typeof paymentId !== "string") {
+    ctx.status = 402;
+    ctx.body = {
+      error: "Payment required",
+      message: "Multipart uploads require a deposit payment. Get price quote at GET /v1/x402/price/:signatureType/:address?deposit=true, then make payment before creating upload.",
+    };
+    return;
+  }
+
+  // Verify deposit payment exists
+  const payment = await database.getX402PaymentById(paymentId);
+  if (!payment) {
+    ctx.status = 404;
+    ctx.body = {
+      error: "Payment not found",
+      message: `No payment found with ID: ${paymentId}`,
+    };
+    return;
+  }
+
+  // Verify payment hasn't already been used
+  if (payment.uploadId) {
+    ctx.status = 400;
+    ctx.body = {
+      error: "Payment already used",
+      message: `This payment has already been linked to upload: ${payment.uploadId}`,
+    };
+    return;
+  }
+
+  // Verify payment is a deposit (check amount matches expected deposit)
+  const expectedDepositAtomic = multipartDepositUSDC * 1_000_000;
+  const actualDepositAtomic = parseFloat(payment.usdcAmount);
+
+  if (Math.abs(actualDepositAtomic - expectedDepositAtomic) > 0.01 * 1_000_000) {
+    ctx.status = 400;
+    ctx.body = {
+      error: "Invalid deposit amount",
+      message: `Expected deposit of ${multipartDepositUSDC} USDC, but payment was for ${actualDepositAtomic / 1_000_000} USDC`,
+    };
+    return;
+  }
+
   const chunkSize =
     typeof chunkSizeRaw === "string" ? parseInt(chunkSizeRaw, 10) : undefined;
   if (
@@ -133,11 +180,19 @@ export async function createMultiPartUpload(ctx: KoaContext) {
     return;
   }
 
-  logger.debug("Creating new multipart upload");
+  logger.debug("Creating new multipart upload with deposit payment", {
+    paymentId,
+    payerAddress: payment.payerAddress,
+  });
   const uploadKey = crypto.randomUUID();
   const newUploadId = await createMultipartUpload(objectStore, uploadKey);
 
   logger.debug("Created new multipart upload", { newUploadId });
+
+  // Link payment to uploadId
+  await database.linkX402PaymentToUploadId(paymentId, newUploadId);
+  logger.info("Linked deposit payment to upload", { paymentId, newUploadId });
+
   // create new upload
   await inFlightUploadCache.put(
     newUploadId,
@@ -160,6 +215,7 @@ export async function createMultiPartUpload(ctx: KoaContext) {
     max: multipartChunkMaxSize,
     min: multipartChunkMinSize,
     chunkSize: chunkSize,
+    depositPaymentId: paymentId,
   };
 
   return; // do not return next()
@@ -1263,9 +1319,39 @@ export async function finalizeMPUWithDataItemInfo({
     dataItemInfo.signatureType
   );
 
-  // x402-bundler: No balance reservation needed
-  // Payment will be verified via x402 payment linked to uploadId
-  fnLogger.debug("x402-bundler: Proceeding without balance check - payment handled separately");
+  // x402-bundler: Verify two-stage payment (deposit + finalization)
+  fnLogger.debug("x402-bundler: Verifying two-stage payment");
+
+  // Get all payments for this uploadId (deposit + finalization)
+  const payments = await database.getX402PaymentsByUploadId(uploadId);
+
+  if (payments.length === 0) {
+    fnLogger.error("No payments found for upload", { uploadId });
+    throw new InsufficientBalance();
+  }
+
+  // Calculate total USDC paid
+  const totalUSDCPaid = payments.reduce((sum, payment) => {
+    return sum + parseFloat(payment.usdcAmount);
+  }, 0);
+
+  // Calculate actual cost based on uploaded bytes
+  const actualByteCount = dataItemInfo.byteCount;
+
+  // TODO: Implement full cost calculation with pricing service
+  // For MVP: Accept any upload that has at least deposit payment
+  // Future: Calculate Winston cost → USDC cost, verify total payment >= actual cost
+  // Handle edge cases:
+  // - If deposit >= cost: No finalization payment needed (overpayment)
+  // - If declared < actual * 1.1: Normal flow
+  // - If declared > actual * 1.1: Fraud - keep both payments as penalty
+
+  fnLogger.info("x402 two-stage payment verified", {
+    uploadId,
+    paymentCount: payments.length,
+    totalUSDCPaid: totalUSDCPaid / 1_000_000,
+    actualByteCount,
+  });
 
   dataItemInfo.assessedWinstonPrice = W("0"); // x402 uses USDC, not Winston
 

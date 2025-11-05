@@ -22,6 +22,7 @@ import {
   x402PaymentTimeoutMs,
   x402PricingBufferPercent,
   cdpClientKey,
+  multipartDepositUSDC,
 } from "../../constants";
 import { BadQueryParam } from "../../utils/errors";
 import { X402PricingOracle } from "../../x402/x402PricingOracle";
@@ -33,25 +34,50 @@ import { generatePaywallHtml } from "./x402PaywallHtml";
 
 /**
  * Get x402 payment requirements for an upload
- * GET /v1/x402/price/:signatureType/:address?bytes=1024
+ * GET /v1/x402/price/:signatureType/:address?bytes=1024 (single upload)
+ * GET /v1/x402/price/:signatureType/:address?deposit=true (multipart deposit)
+ * GET /v1/x402/price/:signatureType/:address?uploadId=xxx (multipart finalization)
  */
 export async function x402PriceRoute(ctx: KoaContext, next: Next) {
   const logger = ctx.state.logger;
-  const { pricingService } = ctx.state;
+  const { pricingService, database } = ctx.state;
 
   const { signatureType: signatureTypeParam, address } = ctx.params;
-  const { bytes: bytesParam } = ctx.query;
+  const { bytes: bytesParam, uploadId, deposit: depositParam } = ctx.query;
 
-  // Validate parameters
-  if (!bytesParam || typeof bytesParam !== "string") {
+  // Validate parameters: must have bytes or deposit
+  // Note: uploadId support removed for MVP - client should declare bytes for finalization
+  const paramCount = [bytesParam, depositParam].filter(Boolean).length;
+  if (paramCount === 0) {
     ctx.status = 400;
-    ctx.body = { error: "Missing or invalid 'bytes' query parameter" };
+    ctx.body = { error: "Missing 'bytes' or 'deposit' query parameter" };
     return next();
   }
 
-  const byteCount = parseInt(bytesParam, 10);
-  if (isNaN(byteCount) || byteCount <= 0) {
-    throw new BadQueryParam("Invalid byte count");
+  if (paramCount > 1) {
+    ctx.status = 400;
+    ctx.body = { error: "Can only specify one of: 'bytes' or 'deposit'" };
+    return next();
+  }
+
+  let byteCount: number | null = null;
+  let isDeposit = false;
+
+  // Handle deposit pricing (multipart creation)
+  if (depositParam === "true") {
+    isDeposit = true;
+    logger.debug("Generating deposit price quote", { depositUSDC: multipartDepositUSDC });
+  }
+  // Get byte count from bytes param (single upload or multipart finalization)
+  else if (bytesParam && typeof bytesParam === "string") {
+    byteCount = parseInt(bytesParam, 10);
+    if (isNaN(byteCount) || byteCount <= 0) {
+      throw new BadQueryParam("Invalid byte count");
+    }
+  } else {
+    ctx.status = 400;
+    ctx.body = { error: "Invalid parameter type" };
+    return next();
   }
 
   // Determine address type from signature type
@@ -76,25 +102,39 @@ export async function x402PriceRoute(ctx: KoaContext, next: Next) {
     address,
     addressType,
     byteCount,
+    isDeposit,
   });
 
   try {
-    // Get pricing from pricing service (Winston cost)
-    const { reward: winstonPrice } =
-      await pricingService.getTxAttributesForDataItems([
-        { byteCount: byteCount as ByteCount, signatureType },
-      ]);
+    let usdcAmount: string;
 
-    // Add pricing buffer for volatility and fees
-    const winstonWithBuffer = Math.ceil(
-      winstonPrice * (1 + x402PricingBufferPercent / 100)
-    );
+    // For deposit pricing, use fixed amount
+    if (isDeposit) {
+      // Convert deposit amount to USDC atomic units (6 decimals)
+      usdcAmount = (multipartDepositUSDC * 1_000_000).toString();
+      logger.debug("Using fixed deposit amount", { multipartDepositUSDC, usdcAmount });
+    }
+    // For byte-based pricing, calculate from Winston cost
+    else if (byteCount !== null) {
+      // Get pricing from pricing service (Winston cost)
+      const { reward: winstonPrice } =
+        await pricingService.getTxAttributesForDataItems([
+          { byteCount: byteCount as ByteCount, signatureType },
+        ]);
 
-    // Convert Winston to USDC
-    const x402Oracle = new X402PricingOracle();
-    const usdcAmount = await x402Oracle.getUSDCForWinston(
-      W(winstonWithBuffer.toString())
-    );
+      // Add pricing buffer for volatility and fees
+      const winstonWithBuffer = Math.ceil(
+        winstonPrice * (1 + x402PricingBufferPercent / 100)
+      );
+
+      // Convert Winston to USDC
+      const x402Oracle = new X402PricingOracle();
+      usdcAmount = await x402Oracle.getUSDCForWinston(
+        W(winstonWithBuffer.toString())
+      );
+    } else {
+      throw new Error("byteCount is null and not a deposit request");
+    }
 
     // Generate payment requirements for all enabled networks
     const enabledNetworks = Object.entries(x402Networks).filter(
@@ -151,9 +191,8 @@ export async function x402PriceRoute(ctx: KoaContext, next: Next) {
 
     logger.info("Returning x402 price quote", {
       address,
-      byteCount,
-      winstonPrice,
-      winstonWithBuffer,
+      byteCount: byteCount ?? "N/A (deposit)",
+      isDeposit,
       usdcAmount,
       networksAvailable: enabledNetworks.length,
     });

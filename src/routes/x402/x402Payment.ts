@@ -32,6 +32,7 @@ import { W } from "../../types/winston";
 /**
  * Process an x402 payment
  * POST /v1/x402/payment/:signatureType/:address
+ * Body: { paymentHeader, dataItemId?, uploadId?, byteCount?, mode? }
  */
 export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
   const logger = ctx.state.logger;
@@ -41,11 +42,13 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
   const {
     paymentHeader,
     dataItemId,
+    uploadId,
     byteCount: byteCountParam,
     mode: modeParam,
   } = (ctx.request as any).body as {
     paymentHeader: string;
     dataItemId?: string;
+    uploadId?: string;
     byteCount?: number;
     mode?: string;
   };
@@ -53,6 +56,19 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
   // Validate parameters
   if (!paymentHeader || typeof paymentHeader !== "string") {
     throw new X402PaymentError("Missing or invalid paymentHeader");
+  }
+
+  // Must have either dataItemId OR uploadId
+  if (!dataItemId && !uploadId) {
+    throw new X402PaymentError(
+      "Either dataItemId or uploadId is required"
+    );
+  }
+
+  if (dataItemId && uploadId) {
+    throw new X402PaymentError(
+      "Cannot specify both dataItemId and uploadId"
+    );
   }
 
   const mode: X402PaymentMode =
@@ -227,6 +243,7 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
       wincAmount: wincPaid,
       mode,
       dataItemId: dataItemId as DataItemId | undefined,
+      uploadId: uploadId as string | undefined,
       declaredByteCount: byteCount,
       payerAddress: authorization.from,
     });
@@ -327,6 +344,8 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
       wincReserved: wincReserved.toString(),
       wincCredited: wincCredited.toString(),
       mode,
+      dataItemId: dataItemId || undefined,
+      uploadId: uploadId || undefined,
     };
   } catch (error) {
     logger.error("X402 payment processing failed", {

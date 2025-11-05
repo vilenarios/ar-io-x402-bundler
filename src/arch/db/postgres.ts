@@ -1469,10 +1469,97 @@ export class PostgresDatabase implements Database {
       usdcAmount: row.usdc_amount,
       wincAmount: W(row.winc_amount),
       dataItemId: row.data_item_id,
+      uploadId: row.upload_id,
       byteCount: +row.byte_count,
       createdAt: row.created_at,
       settledAt: row.settled_at,
     };
+  }
+
+  async getX402PaymentByUploadId(
+    uploadId: string
+  ): Promise<X402Payment | null> {
+    const row = await this.reader("x402_payments")
+      .where({ upload_id: uploadId })
+      .first();
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      paymentId: row.payment_id,
+      txHash: row.tx_hash,
+      network: row.network,
+      payerAddress: row.payer_address,
+      usdcAmount: row.usdc_amount,
+      wincAmount: W(row.winc_amount),
+      dataItemId: row.data_item_id,
+      uploadId: row.upload_id,
+      byteCount: +row.byte_count,
+      createdAt: row.created_at,
+      settledAt: row.settled_at,
+    };
+  }
+
+  async getX402PaymentsByUploadId(
+    uploadId: string
+  ): Promise<X402Payment[]> {
+    const rows = await this.reader("x402_payments")
+      .where({ upload_id: uploadId })
+      .orderBy("created_at", "asc");
+
+    return rows.map((row) => ({
+      paymentId: row.payment_id,
+      txHash: row.tx_hash,
+      network: row.network,
+      payerAddress: row.payer_address,
+      usdcAmount: row.usdc_amount,
+      wincAmount: W(row.winc_amount),
+      dataItemId: row.data_item_id,
+      uploadId: row.upload_id,
+      byteCount: +row.byte_count,
+      createdAt: row.created_at,
+      settledAt: row.settled_at,
+    }));
+  }
+
+  async getX402PaymentById(
+    paymentId: string
+  ): Promise<X402Payment | null> {
+    const row = await this.reader("x402_payments")
+      .where({ payment_id: paymentId })
+      .first();
+
+    if (!row) {
+      return null;
+    }
+
+    return {
+      paymentId: row.payment_id,
+      txHash: row.tx_hash,
+      network: row.network,
+      payerAddress: row.payer_address,
+      usdcAmount: row.usdc_amount,
+      wincAmount: W(row.winc_amount),
+      dataItemId: row.data_item_id,
+      uploadId: row.upload_id,
+      byteCount: +row.byte_count,
+      createdAt: row.created_at,
+      settledAt: row.settled_at,
+    };
+  }
+
+  async linkX402PaymentToUploadId(
+    paymentId: string,
+    uploadId: string
+  ): Promise<void> {
+    await this.writer("x402_payments")
+      .where({ payment_id: paymentId })
+      .update({
+        upload_id: uploadId,
+        updated_at: new Date().toISOString(),
+      });
   }
 
   async createX402Payment(params: {
@@ -1485,11 +1572,17 @@ export class PostgresDatabase implements Database {
     wincAmount: Winston;
     mode: 'payg' | 'topup' | 'hybrid';
     dataItemId?: DataItemId;
+    uploadId?: string; // For multipart uploads
     declaredByteCount?: number;
     payerAddress: string;
   }): Promise<X402Payment> {
     const paymentId = `x402_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const now = new Date().toISOString();
+
+    // Validation: must have either dataItemId OR uploadId
+    if (!params.dataItemId && !params.uploadId) {
+      throw new Error('createX402Payment requires either dataItemId or uploadId');
+    }
 
     await this.writer("x402_payments").insert({
       payment_id: paymentId,
@@ -1502,6 +1595,7 @@ export class PostgresDatabase implements Database {
       winc_amount: params.wincAmount.toString(),
       mode: params.mode,
       data_item_id: params.dataItemId || null,
+      upload_id: params.uploadId || null,
       declared_byte_count: params.declaredByteCount || null,
       payer_address: params.payerAddress,
       status: 'pending_validation',
@@ -1517,6 +1611,7 @@ export class PostgresDatabase implements Database {
       usdcAmount: params.usdcAmount,
       wincAmount: params.wincAmount,
       dataItemId: params.dataItemId,
+      uploadId: params.uploadId,
       byteCount: params.declaredByteCount || 0,
       createdAt: now,
       settledAt: now,

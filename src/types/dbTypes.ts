@@ -370,6 +370,7 @@ export interface X402Payment {
   usdcAmount: string;
   wincAmount: Winston;
   dataItemId?: DataItemId;
+  uploadId?: string; // For multipart uploads
   byteCount: number;
   createdAt: Timestamp;
   settledAt: Timestamp;
