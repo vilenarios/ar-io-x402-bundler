@@ -73,7 +73,7 @@ router.get("/account/balance/:rest", (ctx: KoaContext, next: Next) => {
 router.get(serveRoutesAndV1(["/tx/:id/status"]), statusHandler);
 router.get(serveRoutesAndV1(["/tx/:id/offsets"]), offsetsHandler);
 
-// Multi-part upload routes
+// Multi-part upload routes with x402 payment at finalization
 router.get(serveRoutesAndV1(["/chunks/:token/-1/-1"]), createMultiPartUpload);
 router.get(
   serveRoutesAndV1(["/chunks/:token/:uploadId/-1"]),

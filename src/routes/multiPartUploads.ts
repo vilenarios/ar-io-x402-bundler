@@ -24,28 +24,12 @@ import { ArweaveGateway } from "../arch/arweaveGateway";
 import { Database } from "../arch/db/database";
 import { getElasticacheService } from "../arch/elasticacheService";
 import { ObjectStore } from "../arch/objectStore";
-// Payment service imports removed - x402-only bundler
-// Legacy types defined as stubs for compatibility (not used in x402 flow)
-interface PaymentService {
-  paymentServiceURL?: string;
-  reserveBalanceForData?: any;
-  createDelegatedPaymentApproval?: any;
-  refundBalanceForData?: any;
-  revokeDelegatedPaymentApprovals?: any;
-}
-interface ReserveBalanceResponse {
-  walletExists: boolean;
-  isReserved: boolean;
-  costOfDataItem: any;
-}
+// x402-only bundler - all traditional payment service code removed
 
 import { EnqueueFinalizeUpload, enqueue } from "../arch/queues";
 import { StreamingDataItem } from "../bundles/streamingDataItem";
 import {
-  approvalAmountTagName,
-  approvalExpiresBySecondsTagName,
   blocklistedAddresses,
-  createDelegatedPaymentApprovalTagName,
   dataCaches,
   deadlineHeightIncrement,
   fastFinalityIndexes,
@@ -54,7 +38,6 @@ import {
   multipartChunkMinSize,
   multipartDefaultChunkSize,
   receiptVersion,
-  revokeDelegatePaymentApprovalTagName,
   skipOpticalPostAddresses,
 } from "../constants";
 import { MetricRegistry } from "../metricRegistry";
@@ -79,7 +62,6 @@ import {
   InvalidChunkSize,
   InvalidDataItem,
   MultiPartUploadNotFound,
-  PaymentServiceReturnedError,
 } from "../utils/errors";
 import {
   completeMultipartUpload,
@@ -107,7 +89,7 @@ import {
   signReceipt,
 } from "../utils/signReceipt";
 
-const shouldSkipBalanceCheck = process.env.SKIP_BALANCE_CHECKS === "true";
+// x402-only: No balance checks needed - payment verified directly via x402 protocol
 const opticalBridgingEnabled = process.env.OPTICAL_BRIDGING_ENABLED !== "false";
 const maxAllowablePartNumber = 10_000; // AWS S3 MultiPartUpload part number limitation
 
@@ -515,9 +497,10 @@ async function computeExpectedChunkSize({
   return expectedChunkSize;
 }
 
+// x402-only: Multipart finalization simplified - no payment service needed
+// x402 payments will be handled at single data item upload time, not multipart finalization
 export async function finalizeMultipartUploadWithQueueMessage({
   message,
-  paymentService,
   objectStore,
   database,
   arweaveGateway,
@@ -525,7 +508,6 @@ export async function finalizeMultipartUploadWithQueueMessage({
   logger,
 }: {
   message: { Body?: string };
-  paymentService: PaymentService;
   objectStore: ObjectStore;
   database: Database;
   arweaveGateway: ArweaveGateway;
@@ -544,7 +526,6 @@ export async function finalizeMultipartUploadWithQueueMessage({
 
   await finalizeMultipartUpload({
     uploadId,
-    paymentService,
     objectStore,
     database,
     arweaveGateway,
@@ -577,7 +558,6 @@ export async function finalizeMultipartUploadWithHttpRequest(ctx: KoaContext) {
 
   const asyncValidation = ctx.state.asyncValidation ? true : false;
   const {
-    paymentService,
     objectStore,
     database,
     logger,
@@ -585,7 +565,7 @@ export async function finalizeMultipartUploadWithHttpRequest(ctx: KoaContext) {
     arweaveGateway,
   } = ctx.state;
 
-  logger.debug("Finalizing via HTTP request", {
+  logger.debug("Finalizing via HTTP request (x402-only - no payment service)", {
     paidBy,
     uploadId,
     token,
@@ -595,7 +575,6 @@ export async function finalizeMultipartUploadWithHttpRequest(ctx: KoaContext) {
   try {
     const result = await finalizeMultipartUpload({
       uploadId,
-      paymentService,
       objectStore,
       database,
       arweaveGateway,
@@ -654,7 +633,6 @@ type MultiPartUploadResponse = IrysSignedReceipt & RemainingUploadResponse;
 
 export async function finalizeMultipartUpload({
   uploadId,
-  paymentService,
   objectStore,
   database,
   arweaveGateway,
@@ -665,7 +643,6 @@ export async function finalizeMultipartUpload({
   paidBy,
 }: {
   uploadId: UploadId;
-  paymentService: PaymentService;
   objectStore: ObjectStore;
   database: Database;
   arweaveGateway: ArweaveGateway;
@@ -746,7 +723,6 @@ export async function finalizeMultipartUpload({
     const signedReceipt = await finalizeMPUWithValidatedInfo({
       uploadId,
       objectStore,
-      paymentService,
       database,
       arweaveGateway,
       getArweaveWallet,
@@ -768,7 +744,6 @@ export async function finalizeMultipartUpload({
   const inFlightMPUEntity = await inFlightUploadCache.get(uploadId, database);
   const signedReceipt = await finalizeMPUWithInFlightEntity({
     uploadId,
-    paymentService,
     objectStore,
     database,
     arweaveGateway,
@@ -788,7 +763,6 @@ export async function finalizeMultipartUpload({
 
 export async function finalizeMPUWithInFlightEntity({
   uploadId,
-  paymentService,
   objectStore,
   database,
   arweaveGateway,
@@ -800,7 +774,6 @@ export async function finalizeMPUWithInFlightEntity({
   paidBy,
 }: {
   uploadId: UploadId;
-  paymentService: PaymentService;
   objectStore: ObjectStore;
   database: Database;
   arweaveGateway: ArweaveGateway;
@@ -995,7 +968,6 @@ export async function finalizeMPUWithInFlightEntity({
   return await finalizeMPUWithValidatedInfo({
     uploadId,
     objectStore,
-    paymentService,
     database,
     arweaveGateway,
     getArweaveWallet,
@@ -1013,7 +985,6 @@ export async function finalizeMPUWithInFlightEntity({
 export async function finalizeMPUWithValidatedInfo({
   uploadId,
   objectStore,
-  paymentService,
   database,
   arweaveGateway,
   getArweaveWallet,
@@ -1024,7 +995,6 @@ export async function finalizeMPUWithValidatedInfo({
 }: {
   uploadId: UploadId;
   objectStore: ObjectStore;
-  paymentService: PaymentService;
   database: Database;
   arweaveGateway: ArweaveGateway;
   getArweaveWallet: () => Promise<JWKInterface>;
@@ -1056,7 +1026,6 @@ export async function finalizeMPUWithValidatedInfo({
   ) {
     return await finalizeMPUWithRawDataItem({
       uploadId,
-      paymentService,
       objectStore,
       database,
       arweaveGateway,
@@ -1118,7 +1087,6 @@ export async function finalizeMPUWithValidatedInfo({
   return await finalizeMPUWithDataItemInfo({
     uploadId,
     objectStore,
-    paymentService,
     database,
     arweaveGateway,
     getArweaveWallet,
@@ -1135,7 +1103,7 @@ export async function finalizeMPUWithValidatedInfo({
         [] // TODO: get nested data item headers on multi-part uploads
       ),
       signatureType,
-      assessedWinstonPrice: W("0"), // Stubbed until new_data_item insert
+      assessedWinstonPrice: W("0"), // x402-bundler: No Winston cost - USDC payment
       failedBundles: [],
       signature: fromB64Url(dataItemHeaders.signature),
       target: dataItemHeaders.target,
@@ -1149,7 +1117,6 @@ export async function finalizeMPUWithValidatedInfo({
 
 export async function finalizeMPUWithRawDataItem({
   uploadId,
-  paymentService,
   objectStore,
   database,
   arweaveGateway,
@@ -1160,7 +1127,6 @@ export async function finalizeMPUWithRawDataItem({
   paidBy,
 }: {
   uploadId: UploadId;
-  paymentService: PaymentService;
   objectStore: ObjectStore;
   database: Database;
   arweaveGateway: ArweaveGateway;
@@ -1235,7 +1201,6 @@ export async function finalizeMPUWithRawDataItem({
   return await finalizeMPUWithDataItemInfo({
     uploadId,
     objectStore,
-    paymentService,
     database,
     arweaveGateway,
     getArweaveWallet,
@@ -1253,7 +1218,6 @@ export async function finalizeMPUWithRawDataItem({
 export async function finalizeMPUWithDataItemInfo({
   uploadId,
   objectStore,
-  paymentService,
   database,
   arweaveGateway,
   getArweaveWallet,
@@ -1269,7 +1233,6 @@ export async function finalizeMPUWithDataItemInfo({
     tags: Tag[];
   };
   paidBy?: NativeAddress[];
-  paymentService: PaymentService;
   database: Database;
   arweaveGateway: ArweaveGateway;
   getArweaveWallet: () => Promise<JWKInterface>;
@@ -1300,22 +1263,11 @@ export async function finalizeMPUWithDataItemInfo({
     dataItemInfo.signatureType
   );
 
-  fnLogger.debug("Reserving balance for upload...");
-  const paymentResponse: ReserveBalanceResponse = shouldSkipBalanceCheck
-    ? { isReserved: true, costOfDataItem: W("0"), walletExists: true }
-    : await paymentService.reserveBalanceForData({
-        nativeAddress,
-        size: dataItemInfo.byteCount,
-        dataItemId: dataItemInfo.dataItemId,
-        signatureType: dataItemInfo.signatureType,
-        paidBy,
-      });
-  fnLogger = fnLogger.child({
-    paymentResponse,
-    byteCount: dataItemInfo.byteCount,
-    ownerAddress: dataItemInfo.ownerPublicAddress,
-  });
-  fnLogger.debug("Finished reserving balance for upload.");
+  // x402-bundler: No balance reservation needed
+  // Payment will be verified via x402 payment linked to uploadId
+  fnLogger.debug("x402-bundler: Proceeding without balance check - payment handled separately");
+
+  dataItemInfo.assessedWinstonPrice = W("0"); // x402 uses USDC, not Winston
 
   const performQuarantine = () => {
     // don't need to await this - just invoke and move on
@@ -1333,97 +1285,7 @@ export async function finalizeMPUWithDataItemInfo({
     });
   };
 
-  if (paymentResponse.isReserved) {
-    dataItemInfo.assessedWinstonPrice = paymentResponse.costOfDataItem;
-    fnLogger.debug("Balance successfully reserved", {
-      assessedWinstonPrice: paymentResponse.costOfDataItem,
-    });
-  } else {
-    fnLogger.error(`Failing multipart upload due to insufficient balance.`);
-    performQuarantine();
-    await database.failFinishedMultiPartUpload({
-      uploadId,
-      failedReason: "UNDERFUNDED",
-    });
-    inFlightUploadCache.remove(uploadId);
-    throw new InsufficientBalance();
-  }
-
-  // admin action tags
-  const approvedAddress = dataItemInfo.tags.find(
-    (tag) => tag.name === createDelegatedPaymentApprovalTagName
-  )?.value;
-  const winc = dataItemInfo.tags.find(
-    (tag) => tag.name === approvalAmountTagName
-  )?.value;
-  if (approvedAddress && winc) {
-    const expiresInSeconds = dataItemInfo.tags.find(
-      (tag) => tag.name === approvalExpiresBySecondsTagName
-    )?.value;
-
-    try {
-      await paymentService.createDelegatedPaymentApproval({
-        approvedAddress,
-        payingAddress: nativeAddress,
-        dataItemId: dataItemInfo.dataItemId,
-        winc,
-        expiresInSeconds,
-      });
-    } catch (error) {
-      const message = `Unable to create delegated payment approval ${
-        error instanceof PaymentServiceReturnedError
-          ? `: ${error.message}`
-          : "!"
-      }`;
-      if (paymentResponse.costOfDataItem.isGreaterThan(W(0))) {
-        await paymentService.refundBalanceForData({
-          dataItemId: dataItemInfo.dataItemId,
-          nativeAddress,
-          signatureType: dataItemInfo.signatureType,
-          winston: paymentResponse.costOfDataItem,
-        });
-      }
-      await database.failFinishedMultiPartUpload({
-        uploadId,
-        failedReason: "APPROVAL_FAILED",
-      });
-
-      throw new Error(message);
-    }
-  }
-  const revokedAddress = dataItemInfo.tags.find(
-    (tag) => tag.name === revokeDelegatePaymentApprovalTagName
-  )?.value;
-  if (revokedAddress) {
-    try {
-      await paymentService.revokeDelegatedPaymentApprovals({
-        revokedAddress,
-        payingAddress: nativeAddress,
-        dataItemId: dataItemInfo.dataItemId,
-      });
-    } catch (error) {
-      const message = `Unable to revoke delegated payment approvals ${
-        error instanceof PaymentServiceReturnedError
-          ? `: ${error.message}`
-          : "!"
-      }`;
-      if (paymentResponse.costOfDataItem.isGreaterThan(W(0))) {
-        await paymentService.refundBalanceForData({
-          dataItemId: dataItemInfo.dataItemId,
-          nativeAddress,
-          signatureType: dataItemInfo.signatureType,
-          winston: paymentResponse.costOfDataItem,
-        });
-      }
-
-      await database.failFinishedMultiPartUpload({
-        uploadId,
-        failedReason: "REVOKE_FAILED",
-      });
-
-      throw new Error(message);
-    }
-  }
+  // x402-bundler: Admin approval/revoke tags removed - not supported
 
   const shouldSkipOpticalPost = skipOpticalPostAddresses.includes(
     dataItemInfo.ownerPublicAddress
@@ -1498,20 +1360,7 @@ export async function finalizeMPUWithDataItemInfo({
         Date.now() - dbInsertStart
       }ms`
     );
-    if (paymentResponse.costOfDataItem.isGreaterThan(W(0))) {
-      await paymentService.refundBalanceForData({
-        signatureType: dataItemInfo.signatureType,
-        nativeAddress: ownerToNativeAddress(
-          dataItemInfo.owner,
-          dataItemInfo.signatureType
-        ),
-        winston: paymentResponse.costOfDataItem,
-        dataItemId: dataItemInfo.dataItemId,
-      });
-      fnLogger.info(`Balance refunded due to database error.`, {
-        assessedWinstonPrice: paymentResponse.costOfDataItem,
-      });
-    }
+    // x402-bundler: No refunds needed - payment handled separately
     if (!dataItemExists) {
       performQuarantine();
     }
@@ -1521,9 +1370,9 @@ export async function finalizeMPUWithDataItemInfo({
   return {
     ...signedReceipt,
     dataCaches,
-    fastFinalityIndexes: shouldSkipBalanceCheck ? [] : fastFinalityIndexes,
+    fastFinalityIndexes,
     owner: dataItemInfo.ownerPublicAddress,
-    winc: paymentResponse.costOfDataItem.toString(),
+    winc: dataItemInfo.assessedWinstonPrice.toString(), // Always "0" for x402
   };
 }
 

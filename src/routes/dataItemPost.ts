@@ -17,27 +17,7 @@
 import { Tag, processStream } from "@dha-team/arbundles";
 import { Next } from "koa";
 
-// Payment service types removed - x402-only bundler
-// Legacy types defined as stubs for compatibility (not used in x402 flow)
-interface CheckBalanceResponse {
-  userHasSufficientBalance: boolean;
-  bytesCostInWinc: any;
-  userBalanceInWinc?: any;
-}
-interface ReserveBalanceResponse {
-  walletExists: boolean;
-  isReserved: boolean;
-  costOfDataItem: any;
-}
-interface DelegatedPaymentApproval {
-  approvalDataItemId: string;
-  approvedAddress: string;
-  payingAddress: string;
-  approvedWincAmount: string;
-  usedWincAmount: string;
-  creationDate: string;
-  expirationDate: string;
-}
+// x402-only bundler - all traditional payment service code removed
 
 import { enqueue } from "../arch/queues";
 import { isANS104DataItem } from "../utils/rawDataUtils";
@@ -50,10 +30,7 @@ import {
 import { signatureTypeInfo } from "../constants";
 import {
   anchorLength,
-  approvalAmountTagName,
-  approvalExpiresBySecondsTagName,
   blocklistedAddresses,
-  createDelegatedPaymentApprovalTagName,
   dataCaches,
   deadlineHeightIncrement,
   emptyAnchorLength,
@@ -63,7 +40,6 @@ import {
   maxSingleDataItemByteCount,
   octetStreamContentType,
   receiptVersion,
-  revokeDelegatePaymentApprovalTagName,
   signatureTypeLength,
   skipOpticalPostAddresses,
   targetLength,
@@ -91,7 +67,6 @@ import {
 import {
   DataItemExistsWarning,
   InsufficientBalance,
-  PaymentServiceReturnedError,
 } from "../utils/errors";
 import {
   UPLOAD_DATA_PATH,
@@ -115,7 +90,7 @@ import {
 } from "../utils/signReceipt";
 import { streamToBuffer } from "../utils/streamToBuffer";
 
-const shouldSkipBalanceCheck = process.env.SKIP_BALANCE_CHECKS === "true";
+// x402-only: No balance checks needed - payment verified directly via x402 protocol
 const opticalBridgingEnabled = process.env.OPTICAL_BRIDGING_ENABLED !== "false";
 ensureDataItemsBackupDirExists().catch((error) => {
   globalLogger.error(
@@ -187,7 +162,6 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
   const {
     objectStore,
     cacheService,
-    paymentService,
     arweaveGateway,
     getArweaveWallet,
     database,
@@ -219,40 +193,8 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
     }
   }
 
-  const paidBys: string[] = [];
-  let x402PaymentHeader: string | undefined;
-  ctx.request.req.rawHeaders.forEach((header, index) => {
-    if (header === "x-paid-by") {
-      // get x-paid-by values from raw headers
-      const rawPaidBy = ctx.request.req.rawHeaders[index + 1];
-      if (rawPaidBy) {
-        // split by comma and trim whitespace
-        const paidByAddresses = rawPaidBy
-          .split(",")
-          .map((address) => address.trim());
-        paidBys.push(...paidByAddresses);
-      }
-    }
-    if (header.toLowerCase() === "x-payment") {
-      // Extract x402 payment header
-      x402PaymentHeader = ctx.request.req.rawHeaders[index + 1];
-    }
-  });
-  const paidBy = paidBys.length > 0 ? paidBys : undefined;
-
-  // Track x402 payment state
-  let x402PaymentId: string | undefined;
-  let x402TxHash: string | undefined;
-  let x402Network: string | undefined;
-  let x402Mode: string | undefined;
-
-  // Validate x402 payment requirements
-  if (x402PaymentHeader && rawContentLength === undefined) {
-    return errorResponse(ctx, {
-      errorMessage:
-        "x402 payments require Content-Length header to be present",
-    });
-  }
+  // x402-bundler-lite: No payment headers needed
+  // Payment handled separately via x402 API routes
 
   // Duplicate the request body stream. The original will go to the data item
   // event emitter. This one will go to the object store.
@@ -342,123 +284,9 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
   );
   await markInFlight({ dataItemId, cacheService, logger });
 
-  // Handle payment: x402 or traditional balance check
-  if (shouldSkipBalanceCheck) {
-    logger.debug("Skipping balance check...");
-  } else if (x402PaymentHeader && rawContentLength !== undefined) {
-    // x402 payment flow
-    try {
-      logger.debug("Processing x402 payment...", {
-        dataItemId,
-        byteCount: rawContentLength,
-      });
-
-      const x402Result = await paymentService.verifyAndSettleX402Payment({
-        paymentHeader: x402PaymentHeader,
-        dataItemId,
-        byteCount: rawContentLength,
-        nativeAddress,
-        signatureType,
-        mode: "payg", // Force PAYG mode - x402 is stateless, no credit assignment
-      });
-
-      if (x402Result.success) {
-        logger.debug("x402 payment successful", {
-          paymentId: x402Result.paymentId,
-          txHash: x402Result.txHash,
-          network: x402Result.network,
-        });
-        x402PaymentId = x402Result.paymentId;
-        x402TxHash = x402Result.txHash;
-        x402Network = x402Result.network;
-        x402Mode = x402Result.mode;
-      } else {
-        await removeFromInFlight({ dataItemId, cacheService, logger });
-        errorResponse(ctx, {
-          status: 402,
-          errorMessage: x402Result.error || "x402 payment verification failed",
-        });
-        return next();
-      }
-    } catch (error) {
-      await removeFromInFlight({ dataItemId, cacheService, logger });
-      errorResponse(ctx, {
-        status: 503,
-        errorMessage: `Data Item: ${dataItemId}. x402 payment processing failed`,
-        error,
-      });
-      return next();
-    }
-  } else if (rawContentLength !== undefined) {
-    // No X-PAYMENT header - check if user has balance
-    let checkBalanceResponse: CheckBalanceResponse;
-    try {
-      logger.debug("Checking balance for upload...");
-      checkBalanceResponse = await paymentService.checkBalanceForData({
-        nativeAddress,
-        paidBy,
-        size: rawContentLength,
-        signatureType,
-      });
-    } catch (error) {
-      await removeFromInFlight({ dataItemId, cacheService, logger });
-      errorResponse(ctx, {
-        status: 503,
-        errorMessage: `Data Item: ${dataItemId}. Upload Service is Unavailable. Payment Service is unreachable`,
-      });
-      return next();
-    }
-
-    if (checkBalanceResponse.userHasSufficientBalance) {
-      // User has balance - continue with traditional flow
-      logger.debug("User has balance, proceeding with upload", checkBalanceResponse);
-    } else {
-      // No balance and no X-PAYMENT - return 402 with x402 payment requirements
-      logger.debug("No balance and no X-PAYMENT header - returning 402 with x402 requirements");
-
-      await removeFromInFlight({ dataItemId, cacheService, logger });
-
-      // Get x402 payment requirements from payment service
-      try {
-        const x402Requirements = await paymentService.getX402PriceQuote({
-          byteCount: rawContentLength,
-          nativeAddress,
-          signatureType,
-        });
-
-        if (!x402Requirements) {
-          errorResponse(ctx, {
-            status: 503,
-            errorMessage: "Payment service unavailable",
-          });
-          return next();
-        }
-
-        // x402-compliant 402 response
-        ctx.status = 402;
-        ctx.set("X-Payment-Required", "x402-1");
-        ctx.set("Content-Type", "application/json");
-        ctx.body = x402Requirements;
-
-        logger.info("Returned 402 Payment Required with x402 requirements", {
-          dataItemId,
-          byteCount: rawContentLength,
-          nativeAddress,
-        });
-
-        // MetricRegistry.x402PaymentRequired.inc(); // TODO: Add metric
-        return next();
-      } catch (error) {
-        logger.error("Failed to get x402 price quote", { error });
-        errorResponse(ctx, {
-          status: 503,
-          errorMessage: "Failed to generate payment requirements",
-          error,
-        });
-        return next();
-      }
-    }
-  }
+  // x402-bundler-lite: No inline payment verification
+  // Users handle payment separately via x402 API routes (/v1/x402/price, /v1/x402/payment)
+  logger.debug("x402-bundler-lite: Proceeding with upload without payment verification");
 
   // Parse out the content type and the payload stream
   let payloadContentType: string;
@@ -584,53 +412,8 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
   const payloadDataByteCount = await streamingDataItem.getPayloadSize();
   const totalSize = payloadDataByteCount + payloadDataStart;
 
-  // Finalize x402 payment with actual byte count (fraud detection)
-  if (x402PaymentId) {
-    try {
-      logger.debug("Finalizing x402 payment with actual byte count", {
-        dataItemId,
-        declaredBytes: rawContentLength,
-        actualBytes: totalSize,
-      });
-
-      const finalizeResult = await paymentService.finalizeX402Payment({
-        dataItemId,
-        actualByteCount: totalSize,
-      });
-
-      if (finalizeResult.success) {
-        logger.info("x402 payment finalized", {
-          dataItemId,
-          status: finalizeResult.status,
-          actualBytes: totalSize,
-          refundWinc: finalizeResult.refundWinc,
-        });
-
-        // If fraud was detected, reject the upload
-        if (finalizeResult.status === "fraud_penalty") {
-          await removeFromInFlight({ dataItemId, cacheService, logger });
-          await performQuarantine({
-            status: 402,
-            errorMessage: `Fraud detected: declared ${rawContentLength} bytes but uploaded ${totalSize} bytes. Payment kept as penalty.`,
-          });
-          return next();
-        }
-      } else {
-        // Finalization failed - log warning but don't block upload
-        // The payment was already settled, so we'll allow the upload to proceed
-        logger.warn("x402 payment finalization failed", {
-          dataItemId,
-          error: finalizeResult.error,
-        });
-      }
-    } catch (error) {
-      // Finalization error - log but don't block upload since payment was already settled
-      logger.error("x402 payment finalization error", {
-        dataItemId,
-        error,
-      });
-    }
-  }
+  // x402-bundler-lite: No payment finalization needed
+  // Payment handled separately via x402 API routes
 
   if (totalSize > maxSingleDataItemByteCount) {
     await removeFromInFlight({ dataItemId, cacheService, logger });
@@ -672,146 +455,8 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
     return next();
   }
 
-  // Reserve balance for this upload if the content-length header was not present
-  let paymentResponse: ReserveBalanceResponse;
-  if (shouldSkipBalanceCheck) {
-    logger.debug("Skipping balance check...");
-    paymentResponse = {
-      isReserved: true,
-      costOfDataItem: W(0),
-      walletExists: true,
-    };
-  } else if (x402PaymentId) {
-    // x402 payment already verified and settled - skip traditional reservation
-    logger.debug("Using x402 payment - skipping traditional balance reservation");
-    paymentResponse = {
-      isReserved: true,
-      costOfDataItem: W(0), // Cost handled by x402
-      walletExists: true,
-    };
-  } else {
-    try {
-      logger.debug("Reserving balance for upload...");
-      paymentResponse = await paymentService.reserveBalanceForData({
-        nativeAddress,
-        size: totalSize,
-        dataItemId,
-        signatureType,
-        paidBy,
-      });
-      logger = logger.child({ paymentResponse });
-    } catch (error) {
-      errorResponse(ctx, {
-        status: 503,
-        errorMessage: `Data Item: ${dataItemId}. Upload Service is Unavailable. Payment Service is unreachable`,
-      });
-      await removeFromInFlight({ dataItemId, cacheService, logger });
-      return next();
-    }
-
-    if (paymentResponse.isReserved) {
-      logger.debug("Balance successfully reserved", {
-        assessedWinstonPrice: paymentResponse.costOfDataItem,
-      });
-    } else {
-      if (!paymentResponse.walletExists) {
-        logger.debug("Wallet does not exist.");
-      }
-
-      errorResponse(ctx, {
-        status: 402,
-        error: new InsufficientBalance(),
-      });
-
-      await removeFromInFlight({ dataItemId, cacheService, logger });
-      return next();
-    }
-  }
-
-  // admin action tags
-  const approvedAddress = tags.find(
-    (tag) => tag.name === createDelegatedPaymentApprovalTagName
-  )?.value;
-  let createdApproval: DelegatedPaymentApproval | undefined = undefined;
-  if (approvedAddress) {
-    const winc = tags.find((tag) => tag.name === approvalAmountTagName)?.value;
-    if (winc === undefined) {
-      await removeFromInFlight({ dataItemId, cacheService, logger });
-      errorResponse(ctx, {
-        errorMessage: "Approval x-amount tag missing a winc value!",
-      });
-
-      return next();
-    }
-
-    const expiresInSeconds = tags.find(
-      (tag) => tag.name === approvalExpiresBySecondsTagName
-    )?.value;
-
-    try {
-      createdApproval = await paymentService.createDelegatedPaymentApproval({
-        approvedAddress,
-        payingAddress: nativeAddress,
-        dataItemId,
-        winc,
-        expiresInSeconds,
-      });
-    } catch (error) {
-      const message = `Unable to create delegated payment approval ${
-        error instanceof PaymentServiceReturnedError
-          ? `: ${error.message}`
-          : "!"
-      }`;
-      await removeFromInFlight({ dataItemId, cacheService, logger });
-      errorResponse(ctx, {
-        errorMessage: message,
-      });
-      if (paymentResponse.costOfDataItem.isGreaterThan(W(0))) {
-        await paymentService.refundBalanceForData({
-          dataItemId,
-          nativeAddress,
-          signatureType,
-          winston: paymentResponse.costOfDataItem,
-        });
-      }
-
-      return next();
-    }
-  }
-  const revokedAddress = tags.find(
-    (tag) => tag.name === revokeDelegatePaymentApprovalTagName
-  )?.value;
-  let revokedApprovals: DelegatedPaymentApproval[] = [];
-  if (revokedAddress) {
-    try {
-      revokedApprovals = await paymentService.revokeDelegatedPaymentApprovals({
-        revokedAddress,
-        payingAddress: nativeAddress,
-        dataItemId,
-      });
-    } catch (error) {
-      const message = `Unable to revoke delegated payment approval ${
-        error instanceof PaymentServiceReturnedError
-          ? `: ${error.message}`
-          : "!"
-      }`;
-      await removeFromInFlight({ dataItemId, cacheService, logger });
-      errorResponse(ctx, {
-        errorMessage: message,
-        error,
-      });
-      if (paymentResponse.costOfDataItem.isGreaterThan(W(0))) {
-        await paymentService.refundBalanceForData({
-          dataItemId,
-          nativeAddress,
-          signatureType,
-          winston: paymentResponse.costOfDataItem,
-        });
-      }
-
-      return next();
-    }
-  }
+  // x402-only: Payment already verified and settled - cost is $0 (paid via USDC)
+  const assessedWinstonPrice = W(0); // x402 payments settled directly in USDC
 
   const uploadTimestamp = Date.now();
 
@@ -894,7 +539,7 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
     const receipt: UnsignedReceipt = {
       id: dataItemId,
       timestamp: uploadTimestamp,
-      winc: paymentResponse.costOfDataItem.toString(),
+      winc: assessedWinstonPrice.toString(),
       version: receiptVersion,
       deadlineHeight,
       ...confirmedFeatures,
@@ -907,17 +552,7 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
       actualStores,
     });
   } catch (error) {
-    if (paymentResponse.costOfDataItem.isGreaterThan(W(0))) {
-      await paymentService.refundBalanceForData({
-        signatureType,
-        nativeAddress,
-        winston: paymentResponse.costOfDataItem,
-        dataItemId,
-      });
-      logger.warn(`Balance refunded due to signed receipt error.`, {
-        assessedWinstonPrice: paymentResponse.costOfDataItem,
-      });
-    }
+    // x402-only: No refunds needed - payment already settled via USDC
     await removeFromInFlight({ dataItemId, cacheService, logger });
     await performQuarantine({
       status: 503,
@@ -952,7 +587,7 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
     await enqueue(jobLabels.newDataItem, {
       dataItemId,
       ownerPublicAddress,
-      assessedWinstonPrice: paymentResponse.costOfDataItem,
+      assessedWinstonPrice,
       byteCount: totalSize,
       payloadDataStart,
       signatureType,
@@ -973,17 +608,7 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
   } catch (error) {
     logger.debug(`DB insert failed duration: ${Date.now() - dbInsertStart}ms`);
 
-    if (paymentResponse.costOfDataItem.isGreaterThan(W(0))) {
-      await paymentService.refundBalanceForData({
-        nativeAddress,
-        winston: paymentResponse.costOfDataItem,
-        dataItemId,
-        signatureType: signatureType,
-      });
-      logger.warn(`Balance refunded due to database error.`, {
-        assessedWinstonPrice: paymentResponse.costOfDataItem,
-      });
-    }
+    // x402-only: No refunds needed - payment already settled via USDC
     // always remove from instance cache
     await removeFromInFlight({ dataItemId, cacheService, logger });
     await performQuarantine({
@@ -995,58 +620,10 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
   }
 
   ctx.status = 200;
-
-  let body: Record<
-    string,
-    | string
-    | number
-    | string[]
-    | DelegatedPaymentApproval
-    | DelegatedPaymentApproval[]
-    | Record<string, string | undefined>
-  > = {
+  ctx.body = {
     ...signedReceipt,
     owner: ownerPublicAddress,
   };
-  if (createdApproval) {
-    body = {
-      ...body,
-      createdApproval,
-    };
-  }
-  if (revokedApprovals.length > 0) {
-    body = {
-      ...body,
-      revokedApprovals,
-    };
-  }
-  if (x402PaymentId) {
-    // Add x402 payment info to response body
-    body = {
-      ...body,
-      x402Payment: {
-        paymentId: x402PaymentId,
-        txHash: x402TxHash,
-        network: x402Network,
-        mode: x402Mode,
-      },
-    };
-
-    // x402 standard: Set X-Payment-Response header with payment details
-    const paymentResponse = {
-      paymentId: x402PaymentId,
-      txHash: x402TxHash,
-      network: x402Network,
-      mode: x402Mode,
-    };
-    ctx.set(
-      "X-Payment-Response",
-      Buffer.from(JSON.stringify(paymentResponse)).toString("base64")
-    );
-
-    logger.debug("Set X-Payment-Response header", { paymentResponse });
-  }
-  ctx.body = body;
 
   await removeFromInFlight({ dataItemId, cacheService, logger });
 

@@ -119,11 +119,7 @@ export class DataItemsStillPendingWarning extends BaseError {
   }
 }
 
-export class PaymentServiceReturnedError extends BaseError {
-  constructor(message: string) {
-    super(message);
-  }
-}
+// x402-bundler-lite: PaymentServiceReturnedError removed - no payment service
 
 export class X402PaymentError extends BaseError {
   constructor(message: string) {
