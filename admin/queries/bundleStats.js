@@ -1,0 +1,196 @@
+/**
+ * Bundle Statistics Query Functions
+ *
+ * Queries the upload_service database for bundle information:
+ * - Recent permanent bundles (successfully posted and verified)
+ * - Recent posted bundles (posted but not yet verified)
+ * - Failed bundles
+ * - Bundle planning stats
+ */
+
+/**
+ * Get comprehensive bundle statistics
+ * @param {object} db - Knex database connection (upload_service)
+ * @returns {Promise<object>} Bundle statistics
+ */
+async function getBundleStats(db) {
+  try {
+    const [recentPermanent, recentPosted, recentFailed, planningStats] = await Promise.all([
+      getRecentPermanentBundles(db),
+      getRecentPostedBundles(db),
+      getRecentFailedBundles(db),
+      getBundlePlanningStats(db)
+    ]);
+
+    return {
+      recentPermanent,
+      recentPosted,
+      recentFailed,
+      planning: planningStats
+    };
+  } catch (error) {
+    console.error('Failed to get bundle stats:', error);
+    throw error;
+  }
+}
+
+/**
+ * Get recent permanent bundles (successfully posted and verified)
+ */
+async function getRecentPermanentBundles(db, limit = 20) {
+  const tableExists = await db.schema.hasTable('permanent_bundle');
+
+  if (!tableExists) {
+    return [];
+  }
+
+  const results = await db('permanent_bundle')
+    .select(
+      'bundle_id',
+      'plan_id',
+      'payload_byte_count',
+      'posted_date',
+      'permanent_date',
+      'block_height',
+      'reward'
+    )
+    .orderBy('permanent_date', 'desc')
+    .limit(limit);
+
+  return results.map(row => ({
+    bundleId: row.bundle_id,
+    planId: row.plan_id,
+    payloadSize: parseInt(row.payload_byte_count || 0),
+    payloadSizeFormatted: formatBytes(row.payload_byte_count),
+    postedDate: row.posted_date,
+    permanentDate: row.permanent_date,
+    blockHeight: row.block_height,
+    reward: row.reward,
+    status: 'permanent'
+  }));
+}
+
+/**
+ * Get recent posted bundles (posted but not yet verified)
+ */
+async function getRecentPostedBundles(db, limit = 10) {
+  const tableExists = await db.schema.hasTable('posted_bundle');
+
+  if (!tableExists) {
+    return [];
+  }
+
+  const results = await db('posted_bundle')
+    .select(
+      'bundle_id',
+      'plan_id',
+      'payload_byte_count',
+      'posted_date',
+      'reward'
+    )
+    .orderBy('posted_date', 'desc')
+    .limit(limit);
+
+  return results.map(row => ({
+    bundleId: row.bundle_id,
+    planId: row.plan_id,
+    payloadSize: parseInt(row.payload_byte_count || 0),
+    payloadSizeFormatted: formatBytes(row.payload_byte_count),
+    postedDate: row.posted_date,
+    reward: row.reward,
+    status: 'posted'
+  }));
+}
+
+/**
+ * Get recent failed bundles
+ */
+async function getRecentFailedBundles(db, limit = 10) {
+  const tableExists = await db.schema.hasTable('failed_bundle');
+
+  if (!tableExists) {
+    return [];
+  }
+
+  const results = await db('failed_bundle')
+    .select(
+      'bundle_id',
+      'plan_id',
+      'failed_date',
+      'failed_reason'
+    )
+    .orderBy('failed_date', 'desc')
+    .limit(limit);
+
+  return results.map(row => ({
+    bundleId: row.bundle_id,
+    planId: row.plan_id,
+    failedDate: row.failed_date,
+    failedReason: row.failed_reason,
+    status: 'failed'
+  }));
+}
+
+/**
+ * Get bundle planning statistics
+ */
+async function getBundlePlanningStats(db) {
+  const tableExists = await db.schema.hasTable('bundle_plan');
+
+  if (!tableExists) {
+    return {
+      totalPlanned: 0,
+      totalPermanent: 0,
+      totalPosted: 0,
+      totalFailed: 0
+    };
+  }
+
+  const [planned, permanent, posted, failed] = await Promise.all([
+    db('bundle_plan').count('* as count').first(),
+    db.schema.hasTable('permanent_bundle')
+      ? db('permanent_bundle').count('* as count').first()
+      : { count: 0 },
+    db.schema.hasTable('posted_bundle')
+      ? db('posted_bundle').count('* as count').first()
+      : { count: 0 },
+    db.schema.hasTable('failed_bundle')
+      ? db('failed_bundle').count('* as count').first()
+      : { count: 0 }
+  ]);
+
+  return {
+    totalPlanned: parseInt(planned.count),
+    totalPermanent: parseInt(permanent.count),
+    totalPosted: parseInt(posted.count),
+    totalFailed: parseInt(failed.count)
+  };
+}
+
+/**
+ * Helper: Format bytes to human-readable string
+ */
+function formatBytes(bytes) {
+  const num = typeof bytes === 'string' ? parseFloat(bytes) : parseFloat(bytes || 0);
+  if (num === 0) return '0 B';
+
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let value = num;
+
+  while (value >= k && i < sizes.length - 1) {
+    value = value / k;
+    i++;
+  }
+
+  return `${value.toFixed(2)} ${sizes[i]}`;
+}
+
+module.exports = {
+  getBundleStats,
+  getRecentPermanentBundles,
+  getRecentPostedBundles,
+  getRecentFailedBundles,
+  getBundlePlanningStats
+};

@@ -1,0 +1,198 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: bundler-lite-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: bundler_lite
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching
+  redis-cache:
+    image: redis:7-alpine
+    container_name: bundler-lite-redis-cache
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # Redis for BullMQ queues
+  redis-queue:
+    image: redis:7-alpine
+    container_name: bundler-lite-redis-queue
+    ports:
+      - "6381:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # MinIO for object storage (S3-compatible)
+  minio:
+    image: minio/minio:latest
+    container_name: bundler-lite-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  # MinIO bucket initialization
+  minio-init:
+    image: minio/mc:latest
+    container_name: bundler-lite-minio-init
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc mb myminio/bundler-data-items --ignore-existing;
+      mc anonymous set download myminio/bundler-data-items;
+      exit 0;
+      "
+
+  # AR.IO Bundler Service
+  bundler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bundler-lite-service
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3001
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: bundler_lite
+      DB_POOL_MIN: 2
+      DB_POOL_MAX: 10
+
+      # Redis
+      REDIS_CACHE_HOST: redis-cache
+      REDIS_CACHE_PORT: 6379
+      REDIS_QUEUE_HOST: redis-queue
+      REDIS_QUEUE_PORT: 6379
+
+      # MinIO
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_S3_BUCKET: bundler-data-items
+      AWS_S3_FORCE_PATH_STYLE: "true"
+
+      # Arweave
+      ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-https://arweave.net}
+      ARWEAVE_WALLET_FILE: ${ARWEAVE_WALLET_FILE}
+
+      # x402 Configuration
+      X402_PAYMENT_ADDRESS: ${X402_PAYMENT_ADDRESS}
+      X402_NETWORKS: ${X402_NETWORKS}
+      X402_FRAUD_TOLERANCE_PERCENT: ${X402_FRAUD_TOLERANCE_PERCENT:-5}
+      X402_PRICING_BUFFER_PERCENT: ${X402_PRICING_BUFFER_PERCENT:-5}
+      X402_PAYMENT_TIMEOUT_MS: ${X402_PAYMENT_TIMEOUT_MS:-300000}
+      CDP_API_KEY_ID: ${CDP_API_KEY_ID}
+      CDP_API_KEY_SECRET: ${CDP_API_KEY_SECRET}
+
+      # Bundling
+      MAX_DATA_ITEM_SIZE: ${MAX_DATA_ITEM_SIZE:-10737418240}
+      BUNDLE_SIZE_LIMIT: ${BUNDLE_SIZE_LIMIT:-250000000}
+      ENABLE_OPTICAL_POSTING: ${ENABLE_OPTICAL_POSTING:-false}
+    volumes:
+      - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/v1/info', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); })"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
+  # Admin Dashboard
+  admin:
+    build:
+      context: .
+      dockerfile: Dockerfile.admin
+    container_name: bundler-lite-admin
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+      bundler:
+        condition: service_healthy
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      BULL_BOARD_PORT: 3002
+
+      # Admin credentials
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: bundler_lite
+
+      # Redis
+      REDIS_CACHE_HOST: redis-cache
+      REDIS_CACHE_PORT: 6379
+      REDIS_QUEUE_HOST: redis-queue
+      REDIS_QUEUE_PORT: 6379
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  minio-data:
+
+networks:
+  default:
+    name: bundler-lite-network

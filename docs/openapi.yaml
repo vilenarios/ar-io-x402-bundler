@@ -1,0 +1,811 @@
+openapi: 3.0.3
+info:
+  title: AR.IO Bundler Lite API
+  description: |
+    Lightweight Arweave ANS-104 bundler with x402 USDC payment integration.
+
+    ## x402 Payment Flow
+
+    1. **Get Price Quote**: `GET /v1/x402/price/{signatureType}/{address}?bytes={size}`
+    2. **Create EIP-712 Signature**: Sign payment authorization using wallet
+    3. **Upload with Payment**: `POST /v1/tx` with `X-PAYMENT` header containing base64-encoded payment payload
+    4. **Finalization** (automatic): Service validates actual byte count and applies fraud detection (±5% tolerance)
+
+    ## Supported Networks
+
+    - **Base Mainnet** (chainId: 8453) - Production USDC payments
+    - **Base Sepolia** (chainId: 84532) - Testnet USDC payments
+    - **Ethereum Mainnet** (chainId: 1)
+    - **Polygon** (chainId: 137)
+
+    ## Authentication
+
+    - **x402 Payment Header**: Base64-encoded JSON containing EIP-712 signature and payment details
+    - No API keys required for x402 payments (stateless)
+  version: 1.0.0
+  contact:
+    name: AR.IO Bundler Lite
+    url: https://github.com/ar-io/ar-io-bundler
+  license:
+    name: AGPL-3.0
+    url: https://www.gnu.org/licenses/agpl-3.0.html
+
+servers:
+  - url: http://localhost:3001
+    description: Local development server
+  - url: https://api.example.com
+    description: Production server (configure as needed)
+
+tags:
+  - name: x402
+    description: x402 USDC payment endpoints
+  - name: upload
+    description: Data upload endpoints
+  - name: status
+    description: Status and information endpoints
+
+paths:
+  /v1/x402/price/{signatureType}/{address}:
+    get:
+      tags:
+        - x402
+      summary: Get price quote for data upload
+      description: |
+        Returns the USDC amount required to upload data of a given size.
+        Uses the configured network's USDC token and current AR/USD pricing.
+
+        **Price Calculation:**
+        1. Convert byte count to Winston credits using current AR/USD rate
+        2. Apply network fee multiplier
+        3. Convert Winston to USDC atomic units (6 decimals)
+
+        **Note:** Price quotes are valid for a short time window. Create payment immediately after receiving quote.
+      operationId: getX402Price
+      parameters:
+        - name: signatureType
+          in: path
+          required: true
+          description: Arweave signature type (always use 3 for x402/EIP-712)
+          schema:
+            type: integer
+            enum: [3]
+            example: 3
+        - name: address
+          in: path
+          required: true
+          description: User's EVM wallet address (0x-prefixed)
+          schema:
+            type: string
+            pattern: '^0x[a-fA-F0-9]{40}$'
+            example: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+        - name: bytes
+          in: query
+          required: true
+          description: Number of bytes to upload
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10737418240
+            example: 1024
+        - name: network
+          in: query
+          required: false
+          description: EVM network for payment (defaults to base-sepolia for testnet)
+          schema:
+            type: string
+            enum: [base, base-sepolia, ethereum, polygon]
+            default: base-sepolia
+            example: base-sepolia
+      responses:
+        '200':
+          description: Successful price quote
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/X402PriceQuote'
+              example:
+                usdcAmount: '50000'
+                wincAmount: '1000000000'
+                network: base-sepolia
+                chainId: 84532
+                usdcAddress: '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
+                paymentAddress: '0xYourBundlerAddress'
+                byteCount: 1024
+                expiresAt: '2024-11-04T20:30:00Z'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/x402/payment/{signatureType}/{address}:
+    post:
+      tags:
+        - x402
+      summary: Verify x402 payment authorization
+      description: |
+        Verifies an EIP-712 signed payment authorization for data upload.
+        This endpoint validates the signature, checks USDC allowance/balance,
+        and returns a payment ID to include in the upload request.
+
+        **Payment Verification:**
+        1. Validates EIP-712 signature against USDC contract domain
+        2. Checks that `from` address has sufficient USDC balance
+        3. Verifies USDC allowance for transferWithAuthorization
+        4. Checks that authorization hasn't been used (nonce replay protection)
+        5. Creates payment record in database
+
+        **Important:** This does NOT transfer funds. Actual USDC transfer occurs
+        after upload is finalized and fraud detection passes.
+      operationId: verifyX402Payment
+      parameters:
+        - name: signatureType
+          in: path
+          required: true
+          schema:
+            type: integer
+            enum: [3]
+            example: 3
+        - name: address
+          in: path
+          required: true
+          description: User's EVM wallet address (must match signature)
+          schema:
+            type: string
+            pattern: '^0x[a-fA-F0-9]{40}$'
+            example: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/X402PaymentRequest'
+            example:
+              transferParams:
+                from: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+                to: '0xYourBundlerAddress'
+                value: '50000'
+                validAfter: 0
+                validBefore: 1730754000
+                nonce: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+              signature: '0xabcdef...'
+              network: base-sepolia
+              byteCount: 1024
+      responses:
+        '200':
+          description: Payment verified successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/X402PaymentResponse'
+              example:
+                paymentId: 'pmt_1234567890abcdef'
+                status: 'pending_validation'
+                wincAmount: '1000000000'
+                dataItemId: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/x402/finalize:
+    post:
+      tags:
+        - x402
+      summary: Finalize x402 payment with fraud detection
+      description: |
+        **Internal endpoint** - Called automatically after data upload completes.
+
+        Applies fraud detection by comparing declared vs actual byte count:
+        - **Within ±5% tolerance**: Payment confirmed, USDC transferred
+        - **Under-declared (>5%)**: Fraud penalty, full payment charged
+        - **Over-declared (>5%)**: Refund issued for excess amount
+
+        This endpoint triggers the actual USDC transfer using Coinbase CDP API
+        (mainnet) or on-chain settlement (testnet).
+      operationId: finalizeX402Payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - dataItemId
+                - actualByteCount
+              properties:
+                dataItemId:
+                  type: string
+                  description: Data item transaction ID
+                  example: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+                actualByteCount:
+                  type: integer
+                  minimum: 1
+                  description: Actual number of bytes uploaded
+                  example: 1050
+      responses:
+        '200':
+          description: Payment finalized successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [confirmed, refunded, fraud_penalty]
+                    description: Final payment status
+                  refundWinc:
+                    type: string
+                    description: Refund amount in Winston (if over-declared)
+                    nullable: true
+                  message:
+                    type: string
+                    description: Human-readable status message
+              example:
+                status: 'confirmed'
+                refundWinc: null
+                message: 'Payment confirmed within tolerance'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/tx:
+    post:
+      tags:
+        - upload
+      summary: Upload signed data item
+      description: |
+        Upload a signed ANS-104 data item with x402 payment.
+
+        **Flow:**
+        1. Get price quote from `/v1/x402/price`
+        2. Create EIP-712 signature for payment
+        3. Verify payment at `/v1/x402/payment`
+        4. Upload data with `X-PAYMENT` header containing base64-encoded payment JSON
+
+        **Payment Header Format:**
+        ```json
+        {
+          "paymentId": "pmt_xxx",
+          "signature": "0x...",
+          "transferParams": {...},
+          "network": "base-sepolia"
+        }
+        ```
+
+        The service will:
+        - Verify payment authorization
+        - Accept data item for bundling
+        - Queue async jobs (bundling, posting to Arweave)
+        - Finalize payment with fraud detection
+      operationId: uploadDataItem
+      parameters:
+        - name: X-PAYMENT
+          in: header
+          required: true
+          description: Base64-encoded x402 payment payload
+          schema:
+            type: string
+            format: byte
+            example: 'eyJwYXltZW50SWQiOiJwbXRfMTIzNCIsInNpZ25hdHVyZSI6IjB4Li4uIn0='
+      requestBody:
+        required: true
+        description: Signed ANS-104 data item binary
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Data item accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+              example:
+                id: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+                dataCaches: ['arweave.net']
+                fastFinalityIndexes: []
+                owner: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+                signature: '0x...'
+                deadlineHeight: 1000000
+                block: 950000
+                validatorSignatures: []
+                timestamp: 1730750000000
+                version: '1.0.0'
+                public: null
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '413':
+          description: Payload too large
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: 'Data item exceeds maximum size of 10GB'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/tx/{id}/status:
+    get:
+      tags:
+        - status
+      summary: Get data item status
+      description: |
+        Returns the current status of an uploaded data item.
+
+        **Status Values:**
+        - `pending`: Uploaded, waiting to be bundled
+        - `bundled`: Included in a bundle, waiting to be posted
+        - `posted`: Posted to Arweave, waiting for confirmation
+        - `permanent`: Confirmed on Arweave blockchain
+        - `failed`: Upload or bundling failed
+      operationId: getDataItemStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Data item transaction ID
+          schema:
+            type: string
+            minLength: 43
+            maxLength: 43
+            example: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+      responses:
+        '200':
+          description: Status retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataItemStatus'
+              example:
+                id: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+                status: 'permanent'
+                bundleId: 'bundle_1234567890abcdef'
+                blockHeight: 1000500
+                blockTimestamp: 1730760000
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/tx/{id}/offset:
+    get:
+      tags:
+        - status
+      summary: Get data item offset information
+      description: |
+        Returns offset information for retrieving the data item from Arweave.
+        Only available after the data item has been posted to Arweave.
+      operationId: getDataItemOffset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Data item transaction ID
+          schema:
+            type: string
+            example: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+      responses:
+        '200':
+          description: Offset information retrieved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DataItemOffset'
+              example:
+                id: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+                offset: 123456789
+                size: 1024
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/info:
+    get:
+      tags:
+        - status
+      summary: Get service information
+      description: Returns bundler service version and configuration details
+      operationId: getInfo
+      responses:
+        '200':
+          description: Service information
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServiceInfo'
+              example:
+                version: '1.0.0'
+                x402Enabled: true
+                supportedNetworks: ['base', 'base-sepolia', 'ethereum', 'polygon']
+                maxUploadSize: 10737418240
+
+  /openapi.json:
+    get:
+      tags:
+        - status
+      summary: Get OpenAPI specification
+      description: Returns this OpenAPI spec as JSON
+      operationId: getOpenApiSpec
+      responses:
+        '200':
+          description: OpenAPI specification
+          content:
+            application/json:
+              schema:
+                type: object
+
+components:
+  schemas:
+    X402PriceQuote:
+      type: object
+      required:
+        - usdcAmount
+        - wincAmount
+        - network
+        - chainId
+        - usdcAddress
+        - paymentAddress
+        - byteCount
+        - expiresAt
+      properties:
+        usdcAmount:
+          type: string
+          description: USDC amount in atomic units (6 decimals) as string
+          example: '50000'
+        wincAmount:
+          type: string
+          description: Equivalent Winston credits as string
+          example: '1000000000'
+        network:
+          type: string
+          description: EVM network identifier
+          enum: [base, base-sepolia, ethereum, polygon]
+          example: 'base-sepolia'
+        chainId:
+          type: integer
+          description: EVM chain ID
+          example: 84532
+        usdcAddress:
+          type: string
+          description: USDC token contract address
+          pattern: '^0x[a-fA-F0-9]{40}$'
+          example: '0x036CbD53842c5426634e7929541eC2318f3dCF7e'
+        paymentAddress:
+          type: string
+          description: Bundler's payment receiver address
+          pattern: '^0x[a-fA-F0-9]{40}$'
+          example: '0xYourBundlerAddress'
+        byteCount:
+          type: integer
+          description: Number of bytes quoted
+          example: 1024
+        expiresAt:
+          type: string
+          format: date-time
+          description: Quote expiration timestamp (ISO 8601)
+          example: '2024-11-04T20:30:00Z'
+
+    X402PaymentRequest:
+      type: object
+      required:
+        - transferParams
+        - signature
+        - network
+      properties:
+        transferParams:
+          $ref: '#/components/schemas/TransferParams'
+        signature:
+          type: string
+          description: EIP-712 signature (0x-prefixed hex)
+          pattern: '^0x[a-fA-F0-9]{130}$'
+          example: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890ab'
+        network:
+          type: string
+          enum: [base, base-sepolia, ethereum, polygon]
+          example: 'base-sepolia'
+        byteCount:
+          type: integer
+          minimum: 1
+          description: Declared byte count for fraud detection
+          example: 1024
+
+    TransferParams:
+      type: object
+      description: EIP-3009 transferWithAuthorization parameters
+      required:
+        - from
+        - to
+        - value
+        - validAfter
+        - validBefore
+        - nonce
+      properties:
+        from:
+          type: string
+          description: Payer's EVM address
+          pattern: '^0x[a-fA-F0-9]{40}$'
+          example: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+        to:
+          type: string
+          description: Bundler's payment receiver address
+          pattern: '^0x[a-fA-F0-9]{40}$'
+          example: '0xYourBundlerAddress'
+        value:
+          type: string
+          description: USDC amount in atomic units (6 decimals)
+          example: '50000'
+        validAfter:
+          type: integer
+          description: Unix timestamp after which authorization is valid
+          example: 0
+        validBefore:
+          type: integer
+          description: Unix timestamp before which authorization expires
+          example: 1730754000
+        nonce:
+          type: string
+          description: Random 32-byte hex string for replay protection
+          pattern: '^0x[a-fA-F0-9]{64}$'
+          example: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+
+    X402PaymentResponse:
+      type: object
+      required:
+        - paymentId
+        - status
+        - wincAmount
+      properties:
+        paymentId:
+          type: string
+          description: Unique payment identifier
+          example: 'pmt_1234567890abcdef'
+        status:
+          type: string
+          enum: [pending_validation, confirmed, refunded, fraud_penalty]
+          description: Current payment status
+          example: 'pending_validation'
+        wincAmount:
+          type: string
+          description: Winston credits allocated
+          example: '1000000000'
+        dataItemId:
+          type: string
+          nullable: true
+          description: Associated data item ID (null until upload)
+          example: null
+
+    UploadResponse:
+      type: object
+      required:
+        - id
+        - timestamp
+      properties:
+        id:
+          type: string
+          description: Data item transaction ID
+          example: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+        dataCaches:
+          type: array
+          items:
+            type: string
+          description: List of caches that will index this data
+          example: ['arweave.net']
+        fastFinalityIndexes:
+          type: array
+          items:
+            type: string
+          description: Fast finality indexes
+          example: []
+        owner:
+          type: string
+          description: Owner address
+          example: '0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb'
+        signature:
+          type: string
+          description: Data item signature
+          example: '0x...'
+        deadlineHeight:
+          type: integer
+          description: Arweave block height deadline
+          example: 1000000
+        block:
+          type: integer
+          description: Current Arweave block height
+          example: 950000
+        validatorSignatures:
+          type: array
+          items:
+            type: string
+          example: []
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix timestamp (milliseconds)
+          example: 1730750000000
+        version:
+          type: string
+          description: API version
+          example: '1.0.0'
+        public:
+          type: string
+          nullable: true
+          description: Public key (if applicable)
+          example: null
+
+    DataItemStatus:
+      type: object
+      required:
+        - id
+        - status
+      properties:
+        id:
+          type: string
+          description: Data item transaction ID
+          example: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+        status:
+          type: string
+          enum: [pending, bundled, posted, permanent, failed]
+          description: Current processing status
+          example: 'permanent'
+        bundleId:
+          type: string
+          nullable: true
+          description: Bundle transaction ID (if bundled)
+          example: 'bundle_1234567890abcdef'
+        blockHeight:
+          type: integer
+          nullable: true
+          description: Arweave block height (if confirmed)
+          example: 1000500
+        blockTimestamp:
+          type: integer
+          nullable: true
+          format: int64
+          description: Block timestamp (if confirmed)
+          example: 1730760000
+
+    DataItemOffset:
+      type: object
+      required:
+        - id
+        - offset
+        - size
+      properties:
+        id:
+          type: string
+          description: Data item transaction ID
+          example: 'abcdef1234567890abcdef1234567890abcdef1234567890'
+        offset:
+          type: integer
+          format: int64
+          description: Byte offset in bundle
+          example: 123456789
+        size:
+          type: integer
+          description: Data item size in bytes
+          example: 1024
+
+    ServiceInfo:
+      type: object
+      required:
+        - version
+        - x402Enabled
+      properties:
+        version:
+          type: string
+          description: Service version
+          example: '1.0.0'
+        x402Enabled:
+          type: boolean
+          description: Whether x402 payments are enabled
+          example: true
+        supportedNetworks:
+          type: array
+          items:
+            type: string
+          description: List of supported EVM networks
+          example: ['base', 'base-sepolia', 'ethereum', 'polygon']
+        maxUploadSize:
+          type: integer
+          format: int64
+          description: Maximum upload size in bytes
+          example: 10737418240
+
+    Error:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: string
+          description: Error message
+          example: 'Invalid payment authorization'
+        code:
+          type: string
+          description: Error code (optional)
+          example: 'INVALID_SIGNATURE'
+        details:
+          type: object
+          description: Additional error details (optional)
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Bad request - invalid parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'Invalid byte count parameter'
+            code: 'BAD_REQUEST'
+
+    PaymentRequired:
+      description: Payment required - x402 payment failed or insufficient
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'Invalid payment signature'
+            code: 'PAYMENT_REQUIRED'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'Data item not found'
+            code: 'NOT_FOUND'
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: 'Internal server error'
+            code: 'INTERNAL_ERROR'
+
+  securitySchemes:
+    X402Payment:
+      type: apiKey
+      in: header
+      name: X-PAYMENT
+      description: |
+        Base64-encoded JSON containing x402 payment authorization.
+
+        **Structure:**
+        ```json
+        {
+          "paymentId": "pmt_xxx",
+          "signature": "0x...",
+          "transferParams": {
+            "from": "0x...",
+            "to": "0x...",
+            "value": "50000",
+            "validAfter": 0,
+            "validBefore": 1730754000,
+            "nonce": "0x..."
+          },
+          "network": "base-sepolia"
+        }
+        ```
+
+security:
+  - X402Payment: []

@@ -1,0 +1,46 @@
+# AR.IO Bundler Lite - Admin Dashboard Dockerfile
+# Lightweight Node.js image for admin dashboard
+
+FROM node:18-alpine
+
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    dumb-init \
+    openssl
+
+# Copy package files
+COPY package.json yarn.lock ./
+
+# Install dependencies
+RUN yarn install --frozen-lockfile --production
+
+# Copy admin dashboard files
+COPY admin-server.js ./
+COPY admin ./admin
+COPY lib/constants.js ./lib/
+COPY lib/arch/queues ./lib/arch/queues
+
+# Create non-root user
+RUN addgroup -g 1001 -S admin && \
+    adduser -S admin -u 1001
+
+# Set ownership
+RUN chown -R admin:admin /app
+
+# Switch to non-root user
+USER admin
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:${BULL_BOARD_PORT:-3002}/admin/stats', {headers:{'Authorization':'Basic '+Buffer.from((process.env.ADMIN_USERNAME||'admin')+':'+(process.env.ADMIN_PASSWORD||'')).toString('base64')}}, (r) => { process.exit(r.statusCode === 200 || r.statusCode === 401 ? 0 : 1); })"
+
+# Expose port
+EXPOSE 3002
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+
+# Start the admin dashboard
+CMD ["node", "admin-server.js"]
