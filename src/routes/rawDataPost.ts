@@ -73,7 +73,12 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
 
   if (!paymentHeaderValue) {
     // No payment provided - return 402 Payment Required
-    return await send402PaymentRequired(ctx, parsedRequest.data.length, parsedRequest.contentType);
+    return await send402PaymentRequired(
+      ctx,
+      parsedRequest.data.length,
+      parsedRequest.contentType,
+      parsedRequest.tags
+    );
   }
 
   if (!contentLengthHeader) {
@@ -109,11 +114,24 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
   }
 
   // Calculate pricing for the upload
-  // Estimate final data item size (raw data + ANS-104 overhead)
-  const estimatedDataItemSize = parsedRequest.data.length + 1500; // ~1.5KB for headers/tags
+  // Import estimation function
+  const { estimateDataItemSize } = await import("../utils/createDataItem");
+
+  // Count tags: user tags + 7 system tags for x402
+  // System tags: Bundler, Upload-Type, Payer-Address, X402-TX-Hash, X402-Payment-ID, X402-Network, Upload-Timestamp
+  const userTagCount = parsedRequest.tags?.length || 0;
+  const systemTagCount = 7; // x402 system tags
+  const contentTypeTagCount = parsedRequest.contentType ? 1 : 0;
+  const totalTagCount = userTagCount + systemTagCount + contentTypeTagCount;
+
+  // Estimate final data item size (raw data + ANS-104 overhead with accurate tag count)
+  const estimatedDataItemSize = estimateDataItemSize(parsedRequest.data.length, totalTagCount);
 
   logger.info("Calculating pricing for x402 upload", {
     rawDataSize: parsedRequest.data.length,
+    userTagCount,
+    systemTagCount,
+    totalTagCount,
     estimatedDataItemSize,
   });
 
@@ -122,10 +140,13 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
     estimatedDataItemSize
   );
 
-  // Convert Winston to USDC
+  // Apply 5% buffer here (oracle will apply additional 10% for total ~15.5% to match payment-service)
+  const winstonWithBuffer = Math.ceil(Number(winstonCost) * 1.05);
+
+  // Convert Winston to USDC (oracle applies additional 10% buffer internally)
   const { X402PricingOracle } = await import("../utils/x402Pricing");
   const x402Oracle = new X402PricingOracle();
-  const usdcAmountRequired = await x402Oracle.getUSDCForWinston(W(winstonCost.toString()));
+  const usdcAmountRequired = await x402Oracle.getUSDCForWinston(W(winstonWithBuffer.toString()));
 
   // Build payment requirements for verification
   const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
@@ -188,7 +209,7 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
 
     logger.info("X402 payment settled successfully", {
       txHash: settlement.transactionHash,
-      network: settlement.network,
+      network: paymentPayload.network,
     });
   } catch (error) {
     logger.error("X402 payment failed", { error });
@@ -216,7 +237,7 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
         x402Payment: {
           txHash: settlement.transactionHash!,
           paymentId,
-          network: settlement.network!,
+          network: paymentPayload.network,
         },
       },
       rawDataItemWallet
@@ -269,7 +290,7 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
   await ctx.state.database.insertX402Payment({
     paymentId,
     txHash: settlement.transactionHash!,
-    network: settlement.network!,
+    network: paymentPayload.network,
     payerAddress,
     usdcAmount: paymentPayload.payload.authorization.value,
     wincAmount: wincPaid,
@@ -400,7 +421,7 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
   const x402PaymentResponse = {
     paymentId,
     transactionHash: settlement.transactionHash!,
-    network: settlement.network!,
+    network: paymentPayload.network,
     mode: "payg", // x402 is always PAYG (no credit assignment)
   };
 
@@ -421,7 +442,7 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
     dataItemId: dataItem.id,
     x402PaymentId: paymentId,
     x402TxHash: settlement.transactionHash,
-    x402Network: settlement.network,
+    x402Network: paymentPayload.network,
     x402Mode: "payg",
     payerAddress,
     message: "Payment metadata stored in response. TX hash and payment ID available via x402Payment object",
@@ -434,29 +455,46 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
 async function send402PaymentRequired(
   ctx: KoaContext,
   byteCount: number,
-  mimeType?: string
+  mimeType?: string,
+  tags?: Array<{ name: string; value: string }>
 ): Promise<void> {
   const { logger } = ctx.state;
 
-  logger.info("Sending 402 Payment Required", { byteCount, mimeType });
+  logger.info("Sending 402 Payment Required", { byteCount, mimeType, tagCount: tags?.length || 0 });
 
-  // Calculate accurate pricing using the same method as actual upload
-  const estimatedDataItemSize = byteCount + 1500; // ANS-104 overhead
+  // Calculate accurate pricing using tag-based estimation
+  const { estimateDataItemSize } = await import("../utils/createDataItem");
+
+  // Count tags: user tags + 7 system tags for x402
+  const userTagCount = tags?.length || 0;
+  const systemTagCount = 7; // x402 system tags
+  const contentTypeTagCount = mimeType ? 1 : 0;
+  const totalTagCount = userTagCount + systemTagCount + contentTypeTagCount;
+
+  // Estimate final data item size (raw data + ANS-104 overhead with accurate tag count)
+  const estimatedDataItemSize = estimateDataItemSize(byteCount, totalTagCount);
 
   // Get Winston cost from Arweave gateway
   const winstonCost = await ctx.state.arweaveGateway.getWinstonPriceForByteCount(
     estimatedDataItemSize
   );
 
-  // Convert Winston to USDC using the pricing oracle
+  // Apply 5% buffer here (oracle will apply additional 10% for total ~15.5%)
+  const winstonWithBuffer = Math.ceil(Number(winstonCost) * 1.05);
+
+  // Convert Winston to USDC using the pricing oracle (oracle applies additional 10% buffer internally)
   const { X402PricingOracle } = await import("../utils/x402Pricing");
   const x402Oracle = new X402PricingOracle();
-  const usdcAmountRequired = await x402Oracle.getUSDCForWinston(winstonCost);
+  const usdcAmountRequired = await x402Oracle.getUSDCForWinston(W(winstonWithBuffer.toString()));
 
   logger.info("Calculated x402 price quote", {
     byteCount,
+    userTagCount,
+    systemTagCount,
+    totalTagCount,
     estimatedDataItemSize,
     winstonCost: winstonCost.toString(),
+    winstonWithBuffer,
     usdcAmountRequired,
   });
 

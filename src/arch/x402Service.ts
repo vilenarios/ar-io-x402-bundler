@@ -270,7 +270,7 @@ export class X402Service {
 
         logger.info("X402 payment settled via facilitator", {
           txHash,
-          network: result.network,
+          network: paymentPayload.network,
         });
 
         // Check if transaction hash is present
@@ -285,7 +285,7 @@ export class X402Service {
         return {
           success: true,
           transactionHash: txHash,
-          network: result.network,
+          network: paymentPayload.network,
         };
       }
 

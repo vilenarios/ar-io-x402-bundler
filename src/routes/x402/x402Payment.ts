@@ -339,7 +339,7 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
       success: true,
       paymentId: payment.id,
       txHash: settlement.transactionHash,
-      network: settlement.network,
+      network: network,
       wincPaid,
       wincReserved: wincReserved.toString(),
       wincCredited: wincCredited.toString(),
