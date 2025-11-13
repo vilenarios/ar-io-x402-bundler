@@ -132,6 +132,18 @@ export async function x402PriceRoute(ctx: KoaContext, next: Next) {
       usdcAmount = await x402Oracle.getUSDCForWinston(
         W(winstonWithBuffer.toString())
       );
+
+      // Apply minimum payment threshold (Coinbase facilitator minimum: 0.001 USDC = 1,000 atomic units)
+      // Configurable via X402_MINIMUM_PAYMENT_USDC (in whole dollars, e.g., "0.001")
+      const minimumUsdcWholeDollars = parseFloat(process.env.X402_MINIMUM_PAYMENT_USDC || "0.001");
+      const minimumUsdcAtomicUnits = Math.floor(minimumUsdcWholeDollars * 1e6);
+      if (parseInt(usdcAmount) < minimumUsdcAtomicUnits) {
+        logger.debug("Applying minimum payment threshold", {
+          calculatedAmount: usdcAmount,
+          minimumAmount: minimumUsdcAtomicUnits.toString(),
+        });
+        usdcAmount = minimumUsdcAtomicUnits.toString();
+      }
     } else {
       throw new Error("byteCount is null and not a deposit request");
     }
@@ -147,11 +159,14 @@ export async function x402PriceRoute(ctx: KoaContext, next: Next) {
       return next();
     }
 
+    // IMPORTANT: resource MUST be a full URL for SDK schema validation
+    const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
+
     const accepts = enabledNetworks.map(([networkName, config]) => ({
       scheme: "exact",
       network: networkName,
       maxAmountRequired: usdcAmount,
-      resource: "/v1/tx",
+      resource: `${uploadServicePublicUrl}/v1/tx`, // MUST be full URL for SDK schema validation
       description: "Upload data to Arweave via AR.IO Bundler",
       mimeType: "application/json",
       outputSchema: {

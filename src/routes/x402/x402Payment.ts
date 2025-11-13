@@ -119,26 +119,6 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
   });
 
   try {
-    // Calculate pricing for the upload (if PAYG/hybrid)
-    let winstonCost = W("0");
-    let usdcAmountRequired = "0";
-
-    if (byteCount) {
-      const { reward: winstonPrice } =
-        await pricingService.getTxAttributesForDataItems([
-          { byteCount, signatureType },
-        ]);
-
-      // Add pricing buffer
-      winstonCost = W(
-        Math.ceil(winstonPrice * (1 + x402PricingBufferPercent / 100)).toString()
-      );
-
-      // Convert to USDC
-      const x402Oracle = new X402PricingOracle();
-      usdcAmountRequired = await x402Oracle.getUSDCForWinston(winstonCost);
-    }
-
     // Decode payment header to extract payment details
     const paymentPayload = JSON.parse(
       Buffer.from(paymentHeader, "base64").toString("utf-8")
@@ -163,17 +143,51 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
       throw new Error(`Network configuration not found for ${network}`);
     }
 
-    // Build absolute URL for resource (required by x402 facilitator)
-    // Use configured public URL for the upload service
-    const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
-    const resourceUrl = `${uploadServicePublicUrl}/v1/tx`;
+    // Calculate FRESH winston cost at verification time (CRITICAL - matches ar-io-bundler pattern)
+    // Coinbase facilitator checks if maxAmountRequired covers CURRENT cost, not stale quote
+    let winstonCost = W("0");
+    let usdcAmountRequired = "0";
+
+    if (byteCount) {
+      const { reward: winstonPrice } =
+        await pricingService.getTxAttributesForDataItems([
+          { byteCount, signatureType },
+        ]);
+
+      // Add pricing buffer
+      winstonCost = W(
+        Math.ceil(winstonPrice * (1 + x402PricingBufferPercent / 100)).toString()
+      );
+
+      // Convert Winston to USDC with CURRENT AR price
+      const x402Oracle = new X402PricingOracle();
+      usdcAmountRequired = await x402Oracle.getUSDCForWinston(winstonCost);
+
+      // Apply minimum payment threshold (Coinbase facilitator minimum: 0.001 USDC = 1,000 atomic units)
+      // Configurable via X402_MINIMUM_PAYMENT_USDC (in whole dollars, e.g., "0.001")
+      const minimumUsdcWholeDollars = parseFloat(process.env.X402_MINIMUM_PAYMENT_USDC || "0.001");
+      const minimumUsdcAtomicUnits = Math.floor(minimumUsdcWholeDollars * 1e6);
+      if (parseInt(usdcAmountRequired) < minimumUsdcAtomicUnits) {
+        logger.debug("Applying minimum payment threshold", {
+          calculatedAmount: usdcAmountRequired,
+          minimumAmount: minimumUsdcAtomicUnits.toString(),
+        });
+        usdcAmountRequired = minimumUsdcAtomicUnits.toString();
+      }
+    }
 
     // Build payment requirements for verification
+    // IMPORTANT: Use FRESH calculated USDC amount (not stale authorization.value)
+    // Coinbase verifies that maxAmountRequired <= authorization.value AND that
+    // maxAmountRequired covers the current cost. Using stale value fails when AR price increases.
+
+    // IMPORTANT: resource MUST be a full URL for SDK schema validation
+    const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
     const requirements = {
       scheme: "exact",
       network,
-      maxAmountRequired: mode === "topup" ? authorization.value : usdcAmountRequired,
-      resource: resourceUrl,
+      maxAmountRequired: usdcAmountRequired, // FRESH calculation matching ar-io-bundler
+      resource: `${uploadServicePublicUrl}/v1/tx`, // MUST be full URL for SDK schema validation
       description: `Upload ${byteCount || 0} bytes to Arweave via Turbo`,
       mimeType: "application/octet-stream",
       asset: networkConfig.usdcAddress,
