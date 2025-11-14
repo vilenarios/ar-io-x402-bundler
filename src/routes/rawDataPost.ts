@@ -143,10 +143,9 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
   // Apply 5% buffer here (oracle will apply additional 10% for total ~15.5% to match payment-service)
   const winstonWithBuffer = Math.ceil(Number(winstonCost) * 1.05);
 
-  // Convert Winston to USDC (oracle applies additional 10% buffer internally)
-  const { X402PricingOracle } = await import("../utils/x402Pricing");
-  const x402Oracle = new X402PricingOracle();
-  const usdcAmountRequired = await x402Oracle.getUSDCForWinston(W(winstonWithBuffer.toString()));
+  // Convert Winston to USDC (oracle applies additional 10% buffer internally, using singleton for caching)
+  const { x402PricingOracle } = await import("../utils/x402Pricing");
+  const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithBuffer.toString()));
 
   // Build payment requirements for verification
   const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
@@ -285,8 +284,9 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
 
   const payloadContentType = parsedRequest.contentType || "application/octet-stream";
 
-  // Store x402 payment record in database
-  const wincPaid = await x402Oracle.getWinstonForUSDC(paymentPayload.payload.authorization.value);
+  // Store x402 payment record in database (using singleton for caching)
+  const { x402PricingOracle: oracle } = await import("../utils/x402Pricing");
+  const wincPaid = await oracle.getWinstonForUSDC(paymentPayload.payload.authorization.value);
   await ctx.state.database.insertX402Payment({
     paymentId,
     txHash: settlement.transactionHash!,
@@ -482,10 +482,9 @@ async function send402PaymentRequired(
   // Apply 5% buffer here (oracle will apply additional 10% for total ~15.5%)
   const winstonWithBuffer = Math.ceil(Number(winstonCost) * 1.05);
 
-  // Convert Winston to USDC using the pricing oracle (oracle applies additional 10% buffer internally)
-  const { X402PricingOracle } = await import("../utils/x402Pricing");
-  const x402Oracle = new X402PricingOracle();
-  const usdcAmountRequired = await x402Oracle.getUSDCForWinston(W(winstonWithBuffer.toString()));
+  // Convert Winston to USDC using the pricing oracle (oracle applies additional 10% buffer internally, using singleton for caching)
+  const { x402PricingOracle } = await import("../utils/x402Pricing");
+  const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithBuffer.toString()));
 
   logger.info("Calculated x402 price quote", {
     byteCount,

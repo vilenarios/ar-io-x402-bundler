@@ -161,3 +161,7 @@ export class X402PricingOracle {
     this.cacheTimestamp = 0;
   }
 }
+
+// Singleton instance shared across all requests to enable price caching
+// Creating new instances per-request defeats the 5-minute cache
+export const x402PricingOracle = new X402PricingOracle();

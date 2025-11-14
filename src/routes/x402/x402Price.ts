@@ -25,7 +25,7 @@ import {
   multipartDepositUSDC,
 } from "../../constants";
 import { BadQueryParam } from "../../utils/errors";
-import { X402PricingOracle } from "../../x402/x402PricingOracle";
+import { x402PricingOracle } from "../../x402/x402PricingOracle";
 import { KoaContext } from "../../server";
 import { UserAddressType } from "../../types/dbTypes";
 import { ByteCount, W } from "../../types/types";
@@ -127,9 +127,8 @@ export async function x402PriceRoute(ctx: KoaContext, next: Next) {
         winstonPrice * (1 + x402PricingBufferPercent / 100)
       );
 
-      // Convert Winston to USDC
-      const x402Oracle = new X402PricingOracle();
-      usdcAmount = await x402Oracle.getUSDCForWinston(
+      // Convert Winston to USDC (using singleton for caching)
+      usdcAmount = await x402PricingOracle.getUSDCForWinston(
         W(winstonWithBuffer.toString())
       );
 

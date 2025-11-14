@@ -138,3 +138,7 @@ export class X402PricingOracle {
     return W(winstonAmount.toString());
   }
 }
+
+// Singleton instance shared across all requests to enable price caching
+// Creating new instances per-request defeats the 1-minute cache
+export const x402PricingOracle = new X402PricingOracle();
