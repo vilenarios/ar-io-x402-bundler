@@ -55,7 +55,6 @@ COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/node_modules ./node_modules
 
 # Copy configuration files
-COPY docker-compose.yml ./
 COPY .env.sample ./
 
 # Create non-root user

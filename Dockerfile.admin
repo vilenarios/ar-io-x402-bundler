@@ -1,6 +1,37 @@
 # AR.IO Bundler Lite - Admin Dashboard Dockerfile
-# Lightweight Node.js image for admin dashboard
+# Multi-stage build for admin dashboard
 
+###############################################################################
+# Stage 1: Builder - Build TypeScript to get lib/ files
+###############################################################################
+FROM node:18-alpine AS builder
+
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git \
+    openssl
+
+# Copy package files
+COPY package.json yarn.lock ./
+
+# Install dependencies
+RUN yarn install --frozen-lockfile
+
+# Copy source code
+COPY tsconfig.json ./
+COPY src ./src
+
+# Build TypeScript
+RUN yarn build
+
+###############################################################################
+# Stage 2: Runtime - Admin dashboard
+###############################################################################
 FROM node:18-alpine
 
 WORKDIR /app
@@ -19,8 +50,10 @@ RUN yarn install --frozen-lockfile --production
 # Copy admin dashboard files
 COPY admin-server.js ./
 COPY admin ./admin
-COPY lib/constants.js ./lib/
-COPY lib/arch/queues ./lib/arch/queues
+
+# Copy built lib files from builder
+COPY --from=builder /app/lib/constants.js ./lib/
+COPY --from=builder /app/lib/arch/queues ./lib/arch/queues
 
 # Create non-root user
 RUN addgroup -g 1001 -S admin && \
