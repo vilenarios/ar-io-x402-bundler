@@ -60,7 +60,7 @@ USER bundler
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:${PORT:-3001}/v1/info', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); })"
+  CMD node -e "require('http').get('http://localhost:${PORT:-3001}/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); })"
 
 # Expose ports
 EXPOSE 3001
