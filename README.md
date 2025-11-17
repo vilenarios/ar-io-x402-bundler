@@ -56,7 +56,7 @@ cp .env.sample .env
 ./stop-bundler.sh --clean      # Stop and delete all data
 \`\`\`
 
-📖 **Full Docker guide:** [DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)
+📖 **Full Docker guide:** [DOCKER_DEPLOYMENT.md](./docs/DOCKER_DEPLOYMENT.md)
 
 ### Option 2: CLI with Flags
 
@@ -64,10 +64,10 @@ Use the `quick-start.sh` script with command-line arguments:
 
 \`\`\`bash
 # TESTNET (Base Sepolia - no CDP credentials required)
-./quick-start.sh --wallet ./path/to/wallet.json --x402-address 0xYourEthereumAddress
+./scripts/quick-start.sh --wallet ./path/to/wallet.json --x402-address 0xYourEthereumAddress
 
 # MAINNET (requires Coinbase CDP credentials)
-./quick-start.sh --wallet ./wallet.json --x402-address 0xYourAddress --network mainnet
+./scripts/quick-start.sh --wallet ./wallet.json --x402-address 0xYourAddress --network mainnet
 \`\`\`
 
 ### Option 3: PM2 Deployment
@@ -96,7 +96,7 @@ pm2 start ecosystem.config.js
 pm2 logs
 \`\`\`
 
-📖 **Deployment comparison:** [DEPLOYMENT_OPTIONS.md](./DEPLOYMENT_OPTIONS.md)
+📖 **Deployment comparison:** [DEPLOYMENT_OPTIONS.md](./docs/DEPLOYMENT_OPTIONS.md)
 
 **Useful Commands:**
 \`\`\`bash
@@ -111,10 +111,10 @@ docker-compose down       # Stop infrastructure
 
 ## 📚 Documentation
 
-- **[DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)** - Complete Docker deployment guide
-- **[DEPLOYMENT_OPTIONS.md](./DEPLOYMENT_OPTIONS.md)** - Compare deployment methods
-- **[X402_TWO_STAGE_PAYMENT.md](./X402_TWO_STAGE_PAYMENT.md)** - x402 payment flow details
-- **[CLAUDE.md](./CLAUDE.md)** - Architecture for AI assistants
+- **[DOCKER_DEPLOYMENT.md](./docs/DOCKER_DEPLOYMENT.md)** - Complete Docker deployment guide
+- **[DEPLOYMENT_OPTIONS.md](./docs/DEPLOYMENT_OPTIONS.md)** - Compare deployment methods
+- **[X402_TWO_STAGE_PAYMENT.md](./docs/X402_TWO_STAGE_PAYMENT.md)** - x402 payment flow details
+- **[CLAUDE.md](./docs/CLAUDE.md)** - Architecture for AI assistants
 
 ---
 
