@@ -92,8 +92,34 @@ echo "🚀 Starting all services..."
 docker-compose up -d
 
 echo ""
-echo "⏳ Waiting for services to be healthy..."
-sleep 5
+echo "⏳ Waiting for bundler service to be ready..."
+
+# Wait for bundler to be healthy (max 120 seconds)
+TIMEOUT=120
+ELAPSED=0
+while [ $ELAPSED -lt $TIMEOUT ]; do
+  if docker inspect bundler-lite-service --format='{{.State.Health.Status}}' 2>/dev/null | grep -q "healthy"; then
+    echo -e "${GREEN}✓${NC} Bundler is healthy"
+    break
+  fi
+
+  if [ $ELAPSED -eq 0 ]; then
+    echo -n "  Waiting"
+  else
+    echo -n "."
+  fi
+
+  sleep 2
+  ELAPSED=$((ELAPSED + 2))
+done
+echo ""
+
+if [ $ELAPSED -ge $TIMEOUT ]; then
+  echo -e "${RED}✗ Bundler failed to become healthy${NC}"
+  echo ""
+  echo "Check logs with: docker logs bundler-lite-service"
+  exit 1
+fi
 
 # Run database migrations
 echo ""
@@ -106,6 +132,9 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo -e "${GREEN}✅ AR.IO x402 Bundler is running!${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+echo "Container Status:"
+docker-compose ps --format "table {{.Name}}\t{{.Status}}" | grep -E "bundler|admin|workers" || true
 echo ""
 echo "Services:"
 echo "  📦 Bundler API:       http://localhost:3001"
