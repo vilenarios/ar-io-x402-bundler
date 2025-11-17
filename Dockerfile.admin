@@ -41,11 +41,9 @@ RUN apk add --no-cache \
     dumb-init \
     openssl
 
-# Copy package files
+# Copy package files and dependencies from builder
 COPY package.json yarn.lock ./
-
-# Install dependencies
-RUN yarn install --frozen-lockfile --production
+COPY --from=builder /app/node_modules ./node_modules
 
 # Copy admin dashboard files
 COPY admin-server.js ./

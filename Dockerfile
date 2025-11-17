@@ -44,13 +44,8 @@ RUN apk add --no-cache \
     dumb-init \
     openssl
 
-# Copy package files
+# Copy package files and built application from builder
 COPY package.json yarn.lock ./
-
-# Install production dependencies only
-RUN yarn install --frozen-lockfile --production
-
-# Copy built application from builder
 COPY --from=builder /app/lib ./lib
 COPY --from=builder /app/node_modules ./node_modules
 
