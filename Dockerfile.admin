@@ -43,7 +43,8 @@ RUN apk add --no-cache \
 
 # Create non-root user BEFORE copying files
 RUN addgroup -g 1001 -S admin && \
-    adduser -S admin -u 1001
+    adduser -S admin -u 1001 && \
+    chown admin:admin /app
 
 # Copy files with correct ownership from the start
 COPY --chown=admin:admin package.json yarn.lock ./

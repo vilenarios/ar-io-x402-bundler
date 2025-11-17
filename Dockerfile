@@ -46,7 +46,8 @@ RUN apk add --no-cache \
 
 # Create non-root user BEFORE copying files
 RUN addgroup -g 1001 -S bundler && \
-    adduser -S bundler -u 1001
+    adduser -S bundler -u 1001 && \
+    chown bundler:bundler /app
 
 # Copy files with correct ownership from the start
 COPY --chown=bundler:bundler package.json yarn.lock ./
