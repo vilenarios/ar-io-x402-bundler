@@ -2,11 +2,11 @@
   "name": "ar-io-bundler-lite",
   "version": "1.0.0",
   "description": "Lightweight Arweave bundler with x402 USDC payments - no account management required",
-  "main": "lib/server.js",
+  "main": "lib/index.js",
   "scripts": {
     "build": "yarn clean && tsc",
     "clean": "rimraf lib",
-    "start": "node lib/server.js",
+    "start": "node lib/index.js",
     "start:watch": "nodemon --watch src --ext ts --exec 'yarn build && yarn start'",
     "dev": "nodemon --watch src --ext ts --exec ts-node src/server.ts",
     "admin": "node admin-server.js",

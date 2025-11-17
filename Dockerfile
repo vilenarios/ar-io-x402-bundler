@@ -69,4 +69,4 @@ EXPOSE 3001
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
 
 # Start the bundler service
-CMD ["node", "lib/server.js"]
+CMD ["node", "lib/index.js"]
