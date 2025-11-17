@@ -31,7 +31,14 @@ Perfect for **AI agents**, **CLI tools**, **stateless clients**, and **developer
 
 ### Option 1: All-Docker (Simplest - Recommended)
 
-**Get running in 3 commands:**
+**Interactive Setup (Easiest):**
+
+\`\`\`bash
+./setup-bundler.sh
+# Follow the interactive prompts - it will guide you through everything!
+\`\`\`
+
+**Manual Setup:**
 
 \`\`\`bash
 # 1. Configure
@@ -40,8 +47,6 @@ cp .env.sample .env
 
 # 2. Start everything
 ./start-bundler.sh
-
-# 3. That's it! Check the output for URLs and credentials
 \`\`\`
 
 **What you get:**
