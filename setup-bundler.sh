@@ -58,10 +58,11 @@ DB_PASSWORD="postgres"
 DB_DATABASE="bundler_lite"
 DB_POOL_MIN="2"
 DB_POOL_MAX="10"
-REDIS_CACHE_HOST="redis-cache"
-REDIS_CACHE_PORT="6379"
-REDIS_QUEUE_HOST="redis-queue"
-REDIS_QUEUE_PORT="6381"
+ELASTICACHE_HOST="redis-cache"
+ELASTICACHE_PORT="6379"
+ELASTICACHE_NO_CLUSTERING="true"
+REDIS_HOST="redis-queue"
+REDIS_PORT_QUEUES="6379"
 AWS_REGION="us-east-1"
 AWS_ENDPOINT="http://minio:9000"
 AWS_ACCESS_KEY_ID="minioadmin"
@@ -307,10 +308,14 @@ DB_POOL_MAX=${DB_POOL_MAX}
 #############################################
 # Redis Configuration
 #############################################
-REDIS_CACHE_HOST=${REDIS_CACHE_HOST}
-REDIS_CACHE_PORT=${REDIS_CACHE_PORT}
-REDIS_QUEUE_HOST=${REDIS_QUEUE_HOST}
-REDIS_QUEUE_PORT=${REDIS_QUEUE_PORT}
+# Redis for caching (Elasticache-compatible)
+ELASTICACHE_HOST=${ELASTICACHE_HOST}
+ELASTICACHE_PORT=${ELASTICACHE_PORT}
+ELASTICACHE_NO_CLUSTERING=${ELASTICACHE_NO_CLUSTERING}
+
+# Redis for job queues (BullMQ)
+REDIS_HOST=${REDIS_HOST}
+REDIS_PORT_QUEUES=${REDIS_PORT_QUEUES}
 
 #############################################
 # Object Storage (MinIO/S3)

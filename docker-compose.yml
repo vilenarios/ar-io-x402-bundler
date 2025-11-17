@@ -111,11 +111,14 @@ services:
       DB_POOL_MIN: 2
       DB_POOL_MAX: 10
 
-      # Redis
-      REDIS_CACHE_HOST: redis-cache
-      REDIS_CACHE_PORT: 6379
-      REDIS_QUEUE_HOST: redis-queue
-      REDIS_QUEUE_PORT: 6379
+      # Redis - Cache (Elasticache)
+      ELASTICACHE_HOST: redis-cache
+      ELASTICACHE_PORT: 6379
+      ELASTICACHE_NO_CLUSTERING: "true"
+
+      # Redis - Queue (BullMQ)
+      REDIS_HOST: redis-queue
+      REDIS_PORT_QUEUES: 6379
 
       # MinIO
       AWS_REGION: us-east-1
@@ -181,11 +184,14 @@ services:
       DB_POOL_MIN: 2
       DB_POOL_MAX: 10
 
-      # Redis
-      REDIS_CACHE_HOST: redis-cache
-      REDIS_CACHE_PORT: 6379
-      REDIS_QUEUE_HOST: redis-queue
-      REDIS_QUEUE_PORT: 6379
+      # Redis - Cache (Elasticache)
+      ELASTICACHE_HOST: redis-cache
+      ELASTICACHE_PORT: 6379
+      ELASTICACHE_NO_CLUSTERING: "true"
+
+      # Redis - Queue (BullMQ)
+      REDIS_HOST: redis-queue
+      REDIS_PORT_QUEUES: 6379
 
       # MinIO
       AWS_REGION: us-east-1
@@ -248,11 +254,14 @@ services:
       DB_PASSWORD: postgres
       DB_DATABASE: bundler_lite
 
-      # Redis
-      REDIS_CACHE_HOST: redis-cache
-      REDIS_CACHE_PORT: 6379
-      REDIS_QUEUE_HOST: redis-queue
-      REDIS_QUEUE_PORT: 6379
+      # Redis - Cache (Elasticache)
+      ELASTICACHE_HOST: redis-cache
+      ELASTICACHE_PORT: 6379
+      ELASTICACHE_NO_CLUSTERING: "true"
+
+      # Redis - Queue (BullMQ)
+      REDIS_HOST: redis-queue
+      REDIS_PORT_QUEUES: 6379
     restart: unless-stopped
 
 volumes:
