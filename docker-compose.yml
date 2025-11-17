@@ -150,6 +150,68 @@ services:
       start_period: 60s
       retries: 3
 
+  # BullMQ Workers - Process bundling jobs
+  workers:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bundler-lite-workers
+    command: ["node", "lib/jobs/allWorkers.js"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_DATABASE: bundler_lite
+      DB_POOL_MIN: 2
+      DB_POOL_MAX: 10
+
+      # Redis
+      REDIS_CACHE_HOST: redis-cache
+      REDIS_CACHE_PORT: 6379
+      REDIS_QUEUE_HOST: redis-queue
+      REDIS_QUEUE_PORT: 6379
+
+      # MinIO
+      AWS_REGION: us-east-1
+      AWS_ENDPOINT: http://minio:9000
+      AWS_ACCESS_KEY_ID: minioadmin
+      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_S3_BUCKET: bundler-data-items
+      AWS_S3_FORCE_PATH_STYLE: "true"
+
+      # Arweave
+      ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-https://arweave.net}
+      ARWEAVE_WALLET_FILE: ${ARWEAVE_WALLET_FILE}
+
+      # x402 Configuration
+      X402_PAYMENT_ADDRESS: ${X402_PAYMENT_ADDRESS}
+      X402_NETWORKS: ${X402_NETWORKS}
+      X402_FRAUD_TOLERANCE_PERCENT: ${X402_FRAUD_TOLERANCE_PERCENT:-5}
+      X402_PRICING_BUFFER_PERCENT: ${X402_PRICING_BUFFER_PERCENT:-5}
+      X402_PAYMENT_TIMEOUT_MS: ${X402_PAYMENT_TIMEOUT_MS:-300000}
+      CDP_API_KEY_ID: ${CDP_API_KEY_ID}
+      CDP_API_KEY_SECRET: ${CDP_API_KEY_SECRET}
+
+      # Bundling
+      MAX_DATA_ITEM_SIZE: ${MAX_DATA_ITEM_SIZE:-10737418240}
+      BUNDLE_SIZE_LIMIT: ${BUNDLE_SIZE_LIMIT:-250000000}
+      ENABLE_OPTICAL_POSTING: ${ENABLE_OPTICAL_POSTING:-false}
+    volumes:
+      - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
+    restart: unless-stopped
+
   # Admin Dashboard
   admin:
     build:

@@ -39,7 +39,7 @@ if ! docker ps | grep -q ar-io-x402-bundler-postgres; then
   # Run database migrations
   echo "   Running database migrations..."
   cd "$PROJECT_ROOT"
-  DB_HOST=localhost DB_USER=turbo_admin DB_PASSWORD=postgres DB_DATABASE=upload_service yarn db:migrate:latest
+  yarn db:migrate
   cd "$PROJECT_ROOT"
 
   echo -e "${GREEN}✓${NC} Infrastructure started"

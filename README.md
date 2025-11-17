@@ -23,123 +23,104 @@ Perfect for **AI agents**, **CLI tools**, **stateless clients**, and **developer
 
 ### Prerequisites
 
-- **Node.js** >= 18.0.0
-- **Yarn** >= 1.22.0
-- **Docker** & **Docker Compose** (for infrastructure)
+- **Docker** & **Docker Compose** (recommended)
 - **Arweave Wallet** (JWK file for bundle signing)
 - **EVM Address** (for receiving USDC payments)
 
-### Automated Setup (Recommended)
+*Alternative: Node.js >= 18.0.0 + Yarn >= 1.22.0 for PM2 deployment*
 
-The fastest way to get started is using the **quick-start script**:
+### Option 1: All-Docker (Simplest - Recommended)
+
+**Get running in 3 commands:**
 
 \`\`\`bash
-# Make the script executable (first time only)
-chmod +x quick-start.sh
+# 1. Configure
+cp .env.sample .env
+# Edit .env: set ARWEAVE_WALLET_FILE and X402_PAYMENT_ADDRESS
 
-# Run quick start for TESTNET (Base Sepolia - no CDP credentials required)
+# 2. Start everything
+./start-bundler.sh
+
+# 3. That's it! Check the output for URLs and credentials
+\`\`\`
+
+**What you get:**
+- Bundler API: http://localhost:3001
+- Admin Dashboard: http://localhost:3002/admin/dashboard
+- Queue Monitor: http://localhost:3002/admin/queues
+- MinIO Console: http://localhost:9001
+
+**Stop everything:**
+\`\`\`bash
+./stop-bundler.sh              # Stop (keep data)
+./stop-bundler.sh --clean      # Stop and delete all data
+\`\`\`
+
+📖 **Full Docker guide:** [DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)
+
+### Option 2: CLI with Flags
+
+Use the `quick-start.sh` script with command-line arguments:
+
+\`\`\`bash
+# TESTNET (Base Sepolia - no CDP credentials required)
 ./quick-start.sh --wallet ./path/to/wallet.json --x402-address 0xYourEthereumAddress
 
-# For MAINNET (requires Coinbase CDP credentials)
+# MAINNET (requires Coinbase CDP credentials)
 ./quick-start.sh --wallet ./wallet.json --x402-address 0xYourAddress --network mainnet
 \`\`\`
 
-**What the script does:**
-1. ✓ Validates prerequisites (Node.js, Yarn, Docker)
-2. ✓ Generates secure admin password
-3. ✓ Creates `.env` file with proper configuration
-4. ✓ Starts Docker infrastructure (PostgreSQL, Redis, MinIO)
-5. ✓ Installs dependencies
-6. ✓ Runs database migrations
-7. ✓ Builds TypeScript
-8. ✓ Displays complete setup summary with credentials
+### Option 3: PM2 Deployment
 
-**Script Options:**
-- \`--wallet PATH\` - Path to Arweave wallet JWK file (required)
-- \`--x402-address ADDR\` - Your EVM address for USDC payments (required)
-- \`--network NETWORK\` - Use \`testnet\` (default) or \`mainnet\`
-- \`--skip-build\` - Skip build step (use existing build)
-- \`--skip-docker\` - Skip Docker setup (use existing infrastructure)
-- \`--help\` - Show help message
-
-After the script completes, simply run:
+For development or if you need Node.js debugging:
 
 \`\`\`bash
-# Terminal 1: Start bundler
-yarn start
-
-# Terminal 2: Start admin dashboard
-yarn admin
-\`\`\`
-
-### Manual Installation
-
-If you prefer manual setup:
-
-\`\`\`bash
-# Clone/navigate to the directory
-cd /path/to/ar-io-x402-bundler
-
-# Install dependencies
+# 1. Install dependencies
 yarn install
 
-# Configure environment
+# 2. Configure
 cp .env.sample .env
-# Edit .env with your settings (see Configuration section below)
+# Edit .env with your settings
 
-# Generate admin password
-ADMIN_PASSWORD=$(openssl rand -hex 32)
-echo "ADMIN_PASSWORD=$ADMIN_PASSWORD" >> .env
-
-# Start infrastructure (PostgreSQL, Redis, MinIO)
+# 3. Start infrastructure (Docker)
 yarn docker:up
 
-# Run database migrations
+# 4. Build and migrate
+yarn build
 yarn db:migrate
 
-# Build the service
-yarn build
+# 5. Start with PM2
+pm2 start ecosystem.config.js
 
-# Start the bundler service (Terminal 1)
-yarn start
-
-# Start the admin dashboard (Terminal 2)
-yarn admin
+# View logs
+pm2 logs
 \`\`\`
 
-The services will be available at:
-- **Bundler API**: `http://localhost:3001`
-- **Admin Dashboard**: `http://localhost:3002/admin/dashboard`
-- **Queue Monitor**: `http://localhost:3002/admin/queues`
+📖 **Deployment comparison:** [DEPLOYMENT_OPTIONS.md](./DEPLOYMENT_OPTIONS.md)
 
-**Admin Dashboard Login**: Use ADMIN_USERNAME and ADMIN_PASSWORD from your `.env` file (Basic Auth).
-
-### 🐳 Docker Setup (Easiest - Recommended for Production)
-
-Run **everything** with Docker - infrastructure AND services in one command:
-
+**Useful Commands:**
 \`\`\`bash
-# 1. Create .env file with required variables
-cat > .env << 'EOF'
-ARWEAVE_WALLET_FILE=/path/to/your/wallet.json
-X402_PAYMENT_ADDRESS=0xYourEthereumAddress
-X402_NETWORKS={"base-sepolia":{"enabled":true,"rpcUrl":"https://sepolia.base.org","usdcAddress":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","facilitatorUrl":"https://x402.org/facilitator"}}
-ADMIN_PASSWORD=$(openssl rand -hex 32)
-EOF
-
-# 2. Build and start ALL services (infrastructure + bundler + admin)
-docker-compose up -d --build
-
-# 3. Run database migrations (one-time setup)
-docker-compose exec bundler yarn db:migrate
-
-# 4. View logs
-docker-compose logs -f bundler admin
-
-# That's it! Everything is running.
+pm2 stop all              # Stop services
+pm2 restart all           # Restart services
+pm2 logs upload-api       # View API logs
+pm2 logs upload-workers   # View worker logs
+docker-compose down       # Stop infrastructure
 \`\`\`
 
-**Docker Commands:**
+---
+
+## 📚 Documentation
+
+- **[DOCKER_DEPLOYMENT.md](./DOCKER_DEPLOYMENT.md)** - Complete Docker deployment guide
+- **[DEPLOYMENT_OPTIONS.md](./DEPLOYMENT_OPTIONS.md)** - Compare deployment methods
+- **[X402_TWO_STAGE_PAYMENT.md](./X402_TWO_STAGE_PAYMENT.md)** - x402 payment flow details
+- **[CLAUDE.md](./CLAUDE.md)** - Architecture for AI assistants
+
+---
+
+## 📦 Docker Commands
+
+If using Docker deployment:
 
 \`\`\`bash
 # Start all services
