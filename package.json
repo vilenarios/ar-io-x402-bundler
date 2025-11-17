@@ -18,8 +18,8 @@
     "format": "prettier --write 'src/**/*.ts' 'tests/**/*.ts'",
     "format:check": "prettier --check 'src/**/*.ts' 'tests/**/*.test.ts'",
     "typecheck": "tsc --noEmit",
-    "db:migrate": "knex migrate:latest --knexfile src/arch/db/knexfile.ts",
-    "db:migrate:rollback": "knex migrate:rollback --knexfile src/arch/db/knexfile.ts",
+    "db:migrate": "knex migrate:latest --knexfile lib/arch/db/knexfile.js",
+    "db:migrate:rollback": "knex migrate:rollback --knexfile lib/arch/db/knexfile.js",
     "db:migrate:new": "knex migrate:make --knexfile src/arch/db/knexfile.ts -x ts",
     "docker:up": "docker-compose up -d",
     "docker:down": "docker-compose down -v"
