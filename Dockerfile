@@ -44,20 +44,15 @@ RUN apk add --no-cache \
     dumb-init \
     openssl
 
-# Copy package files and built application from builder
-COPY package.json yarn.lock ./
-COPY --from=builder /app/lib ./lib
-COPY --from=builder /app/node_modules ./node_modules
-
-# Copy configuration files
-COPY .env.sample ./
-
-# Create non-root user
+# Create non-root user BEFORE copying files
 RUN addgroup -g 1001 -S bundler && \
     adduser -S bundler -u 1001
 
-# Set ownership
-RUN chown -R bundler:bundler /app
+# Copy files with correct ownership from the start
+COPY --chown=bundler:bundler package.json yarn.lock ./
+COPY --chown=bundler:bundler --from=builder /app/lib ./lib
+COPY --chown=bundler:bundler --from=builder /app/node_modules ./node_modules
+COPY --chown=bundler:bundler .env.sample ./
 
 # Switch to non-root user
 USER bundler

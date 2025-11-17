@@ -41,24 +41,17 @@ RUN apk add --no-cache \
     dumb-init \
     openssl
 
-# Copy package files and dependencies from builder
-COPY package.json yarn.lock ./
-COPY --from=builder /app/node_modules ./node_modules
-
-# Copy admin dashboard files
-COPY admin-server.js ./
-COPY admin ./admin
-
-# Copy built lib files from builder
-COPY --from=builder /app/lib/constants.js ./lib/
-COPY --from=builder /app/lib/arch/queues ./lib/arch/queues
-
-# Create non-root user
+# Create non-root user BEFORE copying files
 RUN addgroup -g 1001 -S admin && \
     adduser -S admin -u 1001
 
-# Set ownership
-RUN chown -R admin:admin /app
+# Copy files with correct ownership from the start
+COPY --chown=admin:admin package.json yarn.lock ./
+COPY --chown=admin:admin --from=builder /app/node_modules ./node_modules
+COPY --chown=admin:admin admin-server.js ./
+COPY --chown=admin:admin admin ./admin
+COPY --chown=admin:admin --from=builder /app/lib/constants.js ./lib/
+COPY --chown=admin:admin --from=builder /app/lib/arch/queues ./lib/arch/queues
 
 # Switch to non-root user
 USER admin
