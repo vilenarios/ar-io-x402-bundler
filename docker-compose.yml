@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # PostgreSQL Database
   postgres:
@@ -63,18 +61,20 @@ services:
       timeout: 20s
       retries: 3
 
-  # MinIO bucket initialization
+  # MinIO bucket initialization (runs once then exits)
   minio-init:
     image: minio/mc:latest
     container_name: bundler-lite-minio-init
     depends_on:
-      - minio
+      minio:
+        condition: service_healthy
+    restart: "no"
     entrypoint: >
       /bin/sh -c "
-      sleep 5;
       mc alias set myminio http://minio:9000 minioadmin minioadmin;
       mc mb myminio/bundler-data-items --ignore-existing;
       mc anonymous set download myminio/bundler-data-items;
+      echo 'MinIO bucket initialized successfully';
       exit 0;
       "
 
@@ -93,6 +93,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     ports:
       - "3001:3001"
     environment:
@@ -164,6 +166,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       LOG_LEVEL: ${LOG_LEVEL:-info}
