@@ -4,7 +4,7 @@
 ###############################################################################
 # Stage 1: Builder - Install dependencies and build TypeScript
 ###############################################################################
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 
 WORKDIR /app
 
@@ -35,7 +35,7 @@ RUN echo "Default admin password: $(openssl rand -hex 32)" > /tmp/admin-password
 ###############################################################################
 # Stage 2: Runtime - Create minimal production image
 ###############################################################################
-FROM node:18-alpine
+FROM node:20-alpine
 
 WORKDIR /app
 
