@@ -546,6 +546,25 @@ export class S3ObjectStore implements ObjectStore {
     return getHeadResponse.ContentLength ?? 0;
   }
 
+  public async deleteObject(Key: string): Promise<void> {
+    this.logger.debug(`Deleting S3 object...`, {
+      Key,
+      Bucket: this.bucketName,
+    });
+
+    try {
+      const deleteCommand = new DeleteObjectCommand({
+        Bucket: this.bucketName,
+        Key,
+      });
+      await s3ClientForBucket(this.bucketName).send(deleteCommand);
+      this.logger.debug(`Successfully deleted S3 object`, { Key });
+    } catch (error) {
+      this.logger.error(`Failed to delete object!`, { error, Key });
+      throw error;
+    }
+  }
+
   private s3CommandParamsFromOptions(
     Options: ObjectStoreOptions,
     bucket: string

@@ -22,7 +22,7 @@ import {
   mkdirSync,
   statSync,
 } from "fs";
-import { writeFile } from "fs/promises";
+import { unlink, writeFile } from "fs/promises";
 import { Readable } from "stream";
 
 import {
@@ -120,6 +120,21 @@ export class FileSystemObjectStore implements ObjectStore {
 
   public getObjectByteCount(Key: string): Promise<number> {
     return Promise.resolve(statSync(path.join(TEMP_DIR, Key)).size);
+  }
+
+  public async deleteObject(Key: string): Promise<void> {
+    const filePath = path.join(TEMP_DIR, Key);
+    try {
+      await unlink(filePath);
+      logger.debug(`Deleted filesystem object: ${filePath}`);
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        logger.debug(`File already deleted: ${filePath}`);
+        return; // Not an error if file doesn't exist
+      }
+      logger.error(`Failed to delete filesystem object!`, { error, filePath });
+      throw error;
+    }
   }
 
   public getObjectPayloadInfo(_Key: string): Promise<PayloadInfo> {
