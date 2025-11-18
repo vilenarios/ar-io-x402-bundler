@@ -146,7 +146,12 @@ services:
       # Bundling
       MAX_DATA_ITEM_SIZE: ${MAX_DATA_ITEM_SIZE:-10737418240}
       MAX_BUNDLE_SIZE: ${MAX_BUNDLE_SIZE:-250000000}
+      APP_NAME: ${APP_NAME:-AR.IO Bundler}
       OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-true}
+
+      # Optional: Raw Data Uploads
+      RAW_DATA_UPLOADS_ENABLED: ${RAW_DATA_UPLOADS_ENABLED:-false}
+      RAW_DATA_ITEM_JWK_FILE: ${RAW_DATA_ITEM_JWK_FILE}
     volumes:
       - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
     restart: unless-stopped
@@ -221,7 +226,12 @@ services:
       # Bundling
       MAX_DATA_ITEM_SIZE: ${MAX_DATA_ITEM_SIZE:-10737418240}
       MAX_BUNDLE_SIZE: ${MAX_BUNDLE_SIZE:-250000000}
+      APP_NAME: ${APP_NAME:-AR.IO Bundler}
       OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-true}
+
+      # Optional: Raw Data Uploads
+      RAW_DATA_UPLOADS_ENABLED: ${RAW_DATA_UPLOADS_ENABLED:-false}
+      RAW_DATA_ITEM_JWK_FILE: ${RAW_DATA_ITEM_JWK_FILE}
     volumes:
       - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
     restart: unless-stopped
