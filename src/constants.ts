@@ -412,16 +412,29 @@ export interface X402NetworkConfig {
   minConfirmations: number;
 }
 
+// Helper function to parse comma-separated facilitator URLs from env
+function parseFacilitatorUrls(envVar: string | undefined, defaultUrls?: string[]): string[] | undefined {
+  if (envVar) {
+    // Split by comma, trim whitespace, filter empty strings
+    const urls = envVar.split(',').map(url => url.trim()).filter(Boolean);
+    return urls.length > 0 ? urls : defaultUrls;
+  }
+  return defaultUrls;
+}
+
 export const x402Networks: Record<string, X402NetworkConfig> = {
   // Base mainnet (primary name used by AR.IO Gateway)
   base: {
     chainId: 8453,
     usdcAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     rpcUrl: process.env.BASE_MAINNET_RPC_URL || "https://mainnet.base.org",
-    facilitatorUrls: [
-      process.env.X402_FACILITATOR_URL_BASE || "https://api.cdp.coinbase.com/platform/v2/x402",
-      "https://facilitator.mogami.tech", // Fallback
-    ].filter(Boolean),
+    facilitatorUrls: parseFacilitatorUrls(
+      process.env.X402_FACILITATORS_BASE,
+      [
+        "https://api.cdp.coinbase.com/platform/v2/x402", // Coinbase primary
+        "https://facilitator.mogami.tech", // Mogami fallback
+      ]
+    ),
     enabled: process.env.X402_BASE_ENABLED !== "false",
     minConfirmations: +(process.env.X402_BASE_MIN_CONFIRMATIONS || 1),
   },
@@ -430,10 +443,13 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     chainId: 8453,
     usdcAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     rpcUrl: process.env.BASE_MAINNET_RPC_URL || "https://mainnet.base.org",
-    facilitatorUrls: [
-      process.env.X402_FACILITATOR_URL_BASE || "https://api.cdp.coinbase.com/platform/v2/x402",
-      "https://facilitator.mogami.tech", // Fallback
-    ].filter(Boolean),
+    facilitatorUrls: parseFacilitatorUrls(
+      process.env.X402_FACILITATORS_BASE,
+      [
+        "https://api.cdp.coinbase.com/platform/v2/x402", // Coinbase primary
+        "https://facilitator.mogami.tech", // Mogami fallback
+      ]
+    ),
     enabled: process.env.X402_BASE_ENABLED !== "false",
     minConfirmations: +(process.env.X402_BASE_MIN_CONFIRMATIONS || 1),
   },
@@ -442,9 +458,7 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     usdcAddress: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
     rpcUrl:
       process.env.ETHEREUM_MAINNET_RPC_URL || "https://cloudflare-eth.com/",
-    facilitatorUrls: process.env.X402_FACILITATOR_URL_ETH
-      ? [process.env.X402_FACILITATOR_URL_ETH]
-      : undefined,
+    facilitatorUrls: parseFacilitatorUrls(process.env.X402_FACILITATORS_ETH),
     enabled: process.env.X402_ETH_ENABLED === "true", // Default: false (enable Base first)
     minConfirmations: +(process.env.X402_ETH_MIN_CONFIRMATIONS || 3),
   },
@@ -452,9 +466,7 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     chainId: 137,
     usdcAddress: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
     rpcUrl: process.env.POLYGON_MAINNET_RPC_URL || "https://polygon-rpc.com/",
-    facilitatorUrls: process.env.X402_FACILITATOR_URL_POLYGON
-      ? [process.env.X402_FACILITATOR_URL_POLYGON]
-      : undefined,
+    facilitatorUrls: parseFacilitatorUrls(process.env.X402_FACILITATORS_POLYGON),
     enabled: process.env.X402_POLYGON_ENABLED === "true", // Default: false
     minConfirmations: +(process.env.X402_POLYGON_MIN_CONFIRMATIONS || 10),
   },
@@ -462,9 +474,10 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     chainId: 84532,
     usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     rpcUrl: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
-    facilitatorUrls: process.env.X402_FACILITATOR_URL_BASE_TESTNET
-      ? [process.env.X402_FACILITATOR_URL_BASE_TESTNET]
-      : ["https://facilitator.mogami.tech"], // Mogami works on testnet
+    facilitatorUrls: parseFacilitatorUrls(
+      process.env.X402_FACILITATORS_BASE_TESTNET,
+      ["https://facilitator.mogami.tech"] // Mogami default for testnet
+    ),
     enabled: process.env.X402_BASE_TESTNET_ENABLED === "true",
     minConfirmations: 1,
   },
