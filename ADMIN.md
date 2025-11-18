@@ -9,6 +9,12 @@ Complete guide for deploying, operating, monitoring, and troubleshooting the AR.
   - [PM2 Deployment](#pm2-deployment)
   - [Hybrid Deployment](#hybrid-deployment)
 - [Configuration](#configuration)
+- [AR.IO Gateway Integration](#ario-gateway-integration)
+  - [Overview](#overview-1)
+  - [Gateway Configuration](#gateway-configuration)
+  - [Setting Up Your Gateway](#setting-up-your-gateway)
+  - [Monitoring Gateway Integration](#monitoring-gateway-integration)
+  - [Troubleshooting Gateway Issues](#troubleshooting-gateway-issues)
 - [Monitoring](#monitoring)
 - [Operations](#operations)
 - [Troubleshooting](#troubleshooting)
@@ -319,6 +325,441 @@ FREE_UPLOAD_LIMIT=517120             # ~505 KiB
 
 # Database migrations
 MIGRATE_ON_STARTUP=true              # Auto-run migrations on startup
+```
+
+---
+
+## AR.IO Gateway Integration
+
+The bundler integrates with AR.IO gateways using two mechanisms for fast data availability.
+
+### Overview
+
+**Two Integration Methods:**
+
+1. **Optical Bridging** (Data Item Fast Caching)
+   - Job: `optical-post` queue
+   - Endpoint: `/ar-io/admin/queue-data-item`
+   - Posts data item headers immediately after upload
+   - Enables sub-second retrieval before bundle confirmation
+   - Supports multiple bridges (primary, optional, ArDrive-specific)
+   - Filters low-priority AO messages to reduce gateway load
+
+2. **Bundle Priority Queue** (Bundle Fast Indexing)
+   - Job: `post-bundle` queue
+   - Endpoint: `/ar-io/admin/queue-bundle`
+   - Posts bundle transaction ID after bundle posting
+   - Accelerates gateway indexing of the bundle
+   - Requires `AR_IO_ADMIN_KEY` authentication
+
+**Why Two Methods?**
+
+- **Optical bridging**: Makes individual data items available instantly (before bundling)
+- **Bundle queue**: Ensures gateway prioritizes indexing your bundles (after posting to Arweave)
+
+### Gateway Configuration
+
+#### Required Settings
+
+```bash
+# Enable optical bridging (enabled by default)
+OPTICAL_BRIDGING_ENABLED=true
+
+# Primary optical bridge URL (REQUIRED for optical bridging)
+OPTICAL_BRIDGE_URL=http://your-gateway:4000/ar-io/admin/queue-data-item
+
+# Admin key for priority bundle queue (OPTIONAL but recommended)
+AR_IO_ADMIN_KEY=your-gateway-admin-key
+```
+
+#### Gateway Endpoints
+
+```bash
+# Gateway for posting bundles to Arweave
+ARWEAVE_GATEWAY=https://arweave.net
+
+# Gateway advertised to users for data retrieval
+PUBLIC_ACCESS_GATEWAY=https://your-gateway.example.com
+
+# Upload node for TX chunks (must support /chunk endpoint)
+# AR.IO gateways don't support /chunk, so this defaults to arweave.net
+ARWEAVE_UPLOAD_NODE=https://arweave.net
+
+# Multiple gateways for data retrieval (comma-separated)
+DATA_CACHES=your-gateway.example.com,backup-gateway.example.com
+```
+
+#### Advanced Optical Configuration
+
+```bash
+# Optional: Additional optical bridges (won't fail job if these fail)
+OPTIONAL_OPTICAL_BRIDGE_URLS=https://goldsky-bridge.example.com,https://backup-bridge.example.com
+
+# Optional: ArDrive-specific optical bridges
+# Format: url|admin-key-env-name,url2|admin-key-env-name2
+ARDRIVE_GATEWAY_OPTICAL_URLS=https://ardrive-gateway.com/bridge|ardrive-key
+
+# Admin keys for ArDrive gateways (referenced by name in ARDRIVE_GATEWAY_OPTICAL_URLS)
+ARDRIVE_ADMIN_KEY_ARDRIVE_KEY=your-ardrive-admin-key
+
+# Optional: Canary optical bridge for testing (sample rate: 0.0-1.0)
+CANARY_OPTICAL_BRIDGE_URL=https://canary-bridge.example.com
+CANARY_OPTICAL_SAMPLE_RATE=0.1  # 10% of uploads sent to canary
+```
+
+### Setting Up Your Gateway
+
+#### AR.IO Gateway Prerequisites
+
+Your AR.IO gateway must expose these admin endpoints:
+
+1. **`POST /ar-io/admin/queue-data-item`**
+   - Accepts data item headers for fast caching
+   - Requires `x-bundlr-public-key` header (optical wallet public key)
+   - Optional: `Authorization: Bearer <admin-key>` header
+
+2. **`POST /ar-io/admin/queue-bundle`**
+   - Accepts bundle transaction IDs for priority indexing
+   - Requires `Authorization: Bearer <admin-key>` header
+   - Body: `{ "id": "bundle-tx-id" }`
+
+#### Step-by-Step Setup
+
+**1. Configure Gateway Admin Key**
+
+On your AR.IO gateway, set an admin key for authenticated requests:
+
+```bash
+# In your gateway's .env
+ADMIN_KEY=your-secure-admin-key
+```
+
+**2. Configure Bundler to Use Your Gateway**
+
+```bash
+# In bundler's .env
+OPTICAL_BRIDGE_URL=http://your-gateway:4000/ar-io/admin/queue-data-item
+AR_IO_ADMIN_KEY=your-secure-admin-key
+PUBLIC_ACCESS_GATEWAY=https://your-gateway.example.com
+```
+
+**3. Verify Optical Wallet**
+
+The bundler uses an "optical wallet" to sign data item headers. This is the same as `ARWEAVE_WALLET_FILE` unless you've configured a separate optical wallet.
+
+**4. Test Optical Bridging**
+
+Upload a test data item and check gateway logs:
+
+```bash
+# Upload test file
+curl -X POST "http://localhost:3001/v1/tx" \
+  -H "Content-Type: application/octet-stream" \
+  -H "X-PAYMENT: <payment-header>" \
+  --data-binary @test.bin
+
+# Check optical-post queue
+# Access Bull Board: http://localhost:3002/admin/queues
+# Look for optical-post job completion
+
+# Verify on gateway
+curl "https://your-gateway.example.com/<data-item-id>"
+```
+
+### Monitoring Gateway Integration
+
+#### Check Optical Bridge Status
+
+**Bull Board** (http://localhost:3002/admin/queues):
+- Monitor `optical-post` queue
+- Check for failed optical-post jobs
+- Review error details in failed jobs
+
+**Database Queries:**
+
+```sql
+-- Check recent optical-post job activity (requires BullMQ Redis)
+-- This is handled by Bull Board UI
+
+-- Verify data items were uploaded
+SELECT id, uploaded_date, byte_count
+FROM new_data_item
+ORDER BY uploaded_date DESC
+LIMIT 10;
+```
+
+#### Prometheus Metrics
+
+Access metrics at: http://localhost:3001/bundler_metrics
+
+**Optical-specific metrics:**
+
+```
+# Optical bridge circuit breaker status
+circuit_breaker_state{source="optical_legacyGateway"} 0  # 0=closed, 1=open
+circuit_breaker_state{source="optical_goldsky"} 0
+circuit_breaker_state{source="optical_ardriveGateway"} 0
+
+# Optical bridge failures
+optical_failure_total{bridge="legacy"} 0
+optical_failure_total{bridge="goldsky"} 0
+optical_failure_total{bridge="ardrive"} 0
+```
+
+#### Log Monitoring
+
+**Docker:**
+
+```bash
+# Worker logs contain optical-post activity
+docker-compose logs -f workers | grep optical
+
+# Look for:
+# - "Posting to optical bridge..."
+# - "Successfully posted to primary optical bridge"
+# - "Failed to post to optical bridge"
+```
+
+**PM2:**
+
+```bash
+# Worker logs
+pm2 logs upload-workers | grep optical
+```
+
+#### Circuit Breaker Behavior
+
+Optical bridges use circuit breakers to prevent cascading failures:
+
+- **Timeout**: 3 seconds (production), 7.7 seconds (local)
+- **Error Threshold**: 50% failure rate
+- **Reset Timeout**: 30 seconds (breaker opens after threshold, tries again after 30s)
+
+When a circuit breaker opens:
+- Requests to that optical bridge are blocked
+- Logs show "Optical circuit breaker command timed out"
+- Breaker automatically retries after 30 seconds
+- Primary bridge failures cause job failure; optional bridges don't
+
+### Troubleshooting Gateway Issues
+
+#### Problem: Optical bridge connection failed
+
+**Symptoms:**
+
+```
+Failed to post to optical bridge: ECONNREFUSED
+```
+
+**Solutions:**
+
+1. **Verify gateway is running:**
+
+```bash
+# Test gateway admin endpoint
+curl -X POST "http://your-gateway:4000/ar-io/admin/queue-data-item" \
+  -H "Content-Type: application/json" \
+  -d '[]'
+
+# Should return 200 or 401 (not connection refused)
+```
+
+2. **Check OPTICAL_BRIDGE_URL:**
+
+```bash
+# Verify URL format
+grep OPTICAL_BRIDGE_URL .env
+
+# Should be: http://hostname:port/ar-io/admin/queue-data-item
+```
+
+3. **Check network connectivity:**
+
+```bash
+# From bundler to gateway
+docker-compose exec bundler ping your-gateway-host
+docker-compose exec bundler curl http://your-gateway:4000/ar-io/health
+```
+
+#### Problem: Optical bridge authentication failed
+
+**Symptoms:**
+
+```
+Failed to post to optical bridge: 401 Unauthorized
+```
+
+**Solutions:**
+
+1. **Verify AR_IO_ADMIN_KEY matches gateway:**
+
+```bash
+# Bundler .env
+grep AR_IO_ADMIN_KEY .env
+
+# Gateway .env (on gateway server)
+grep ADMIN_KEY /path/to/gateway/.env
+```
+
+2. **Check headers are sent:**
+
+```bash
+# Enable debug logging
+LOG_LEVEL=debug docker-compose restart workers
+
+# Check logs for Authorization header
+docker-compose logs workers | grep Authorization
+```
+
+#### Problem: Circuit breaker opened (optical bridge timing out)
+
+**Symptoms:**
+
+```
+Optical circuit breaker command timed out
+circuit_breaker_state{source="optical_legacyGateway"} 1
+```
+
+**Solutions:**
+
+1. **Check gateway performance:**
+
+```bash
+# Test gateway response time
+time curl -X POST "http://your-gateway:4000/ar-io/admin/queue-data-item" \
+  -H "Content-Type: application/json" \
+  -d '[]'
+
+# Should complete in < 3 seconds
+```
+
+2. **Increase timeout (if needed):**
+
+Edit `src/jobs/optical-post.ts` and rebuild:
+
+```typescript
+timeout: process.env.NODE_ENV === "local" ? 7777 : 5000,  // Increase from 3000
+```
+
+3. **Wait for circuit breaker reset:**
+
+The circuit breaker automatically resets after 30 seconds. Check metrics:
+
+```bash
+# Monitor breaker state
+watch -n 1 'curl -s http://localhost:3001/bundler_metrics | grep circuit_breaker_state'
+```
+
+#### Problem: Data items not appearing on gateway
+
+**Symptoms:**
+
+- Optical-post jobs succeed
+- Data items not retrievable from gateway
+
+**Solutions:**
+
+1. **Verify gateway received the data item header:**
+
+Check gateway logs for data item ID
+
+2. **Check optical wallet public key:**
+
+```bash
+# The bundler sends x-bundlr-public-key header
+# Verify it matches your wallet
+
+# Get wallet address
+docker-compose exec bundler node -e "
+const Arweave = require('arweave');
+const jwk = require('$ARWEAVE_WALLET_FILE');
+const arweave = Arweave.init({});
+arweave.wallets.jwkToAddress(jwk).then(console.log);
+"
+```
+
+3. **Verify optical bridging is enabled:**
+
+```bash
+grep OPTICAL_BRIDGING_ENABLED .env
+# Should be: OPTICAL_BRIDGING_ENABLED=true
+```
+
+4. **Check if AO message filtering is removing your items:**
+
+Low-priority AO messages are filtered out. Check logs:
+
+```bash
+docker-compose logs workers | grep "filtered out"
+```
+
+#### Problem: High optical bridge failure rate
+
+**Symptoms:**
+
+```
+optical_failure_total{bridge="legacy"} 1523
+```
+
+**Solutions:**
+
+1. **Check gateway health:**
+
+```bash
+# Gateway should be healthy
+curl http://your-gateway:4000/ar-io/health
+```
+
+2. **Review failed jobs in Bull Board:**
+
+http://localhost:3002/admin/queues → optical-post → Failed Jobs
+
+3. **Consider using optional bridges as fallback:**
+
+```bash
+# Add backup optical bridge (won't fail jobs)
+OPTIONAL_OPTICAL_BRIDGE_URLS=https://backup-gateway.example.com/bridge
+```
+
+4. **Temporarily disable optical bridging if critical:**
+
+```bash
+# Disable optical bridging (data items will still be bundled normally)
+OPTICAL_BRIDGING_ENABLED=false
+docker-compose restart bundler workers
+```
+
+#### Problem: ArDrive-specific optical routing not working
+
+**Symptoms:**
+
+ArDrive uploads not appearing on ArDrive gateway
+
+**Solutions:**
+
+1. **Verify ArDrive gateway configuration:**
+
+```bash
+grep ARDRIVE_GATEWAY_OPTICAL_URLS .env
+# Format: https://gateway.com/bridge|admin-key-name
+
+grep ARDRIVE_ADMIN_KEY_ .env
+# Should have key matching the name in ARDRIVE_GATEWAY_OPTICAL_URLS
+```
+
+2. **Check if uploads have ArDrive tags:**
+
+ArDrive-specific routing requires `App-Name` tag starting with "ArDrive":
+
+```sql
+-- Check for ArDrive tags in recent uploads
+-- (This requires inspecting the actual data item tags)
+```
+
+3. **Check logs for ArDrive optical posts:**
+
+```bash
+docker-compose logs workers | grep "ardrive gateway optical"
 ```
 
 ---
