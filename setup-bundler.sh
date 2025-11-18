@@ -124,6 +124,8 @@ echo "Your bundler needs an Arweave wallet to sign bundles."
 echo "This must be an ABSOLUTE path (e.g., /home/user/wallet.json)"
 echo ""
 
+ARWEAVE_OWNER_ADDRESS=""
+
 while true; do
   read -p "Enter path to Arweave wallet file: " ARWEAVE_WALLET_FILE
 
@@ -150,6 +152,26 @@ while true; do
     fi
   else
     echo -e "${GREEN}✓${NC} Wallet file found"
+
+    # Try to extract owner address for gateway integration
+    if command -v node &> /dev/null; then
+      ARWEAVE_OWNER_ADDRESS=$(node -e "
+        const fs = require('fs');
+        const crypto = require('crypto');
+        try {
+          const jwk = JSON.parse(fs.readFileSync('$ARWEAVE_WALLET_FILE', 'utf8'));
+          const n = Buffer.from(jwk.n, 'base64url');
+          const hash = crypto.createHash('sha256').update(n).digest();
+          console.log(hash.toString('base64url'));
+        } catch (e) {
+          console.log('');
+        }
+      " 2>/dev/null || echo "")
+
+      if [ -n "$ARWEAVE_OWNER_ADDRESS" ]; then
+        echo -e "${GREEN}✓${NC} Wallet address: $ARWEAVE_OWNER_ADDRESS"
+      fi
+    fi
     break
   fi
 done
@@ -240,35 +262,101 @@ echo ""
 #############################
 # Step 5: Optional Settings
 #############################
-echo -e "${CYAN}━━━ Step 5/5: Optional Settings ━━━${NC}"
+echo -e "${CYAN}━━━ Step 5/6: Gateway Configuration ━━━${NC}"
 echo ""
-echo "Configure optional features (or press Enter to skip)."
+
+# Public Access Gateway
+echo "Public Access Gateway:"
+echo "  This is the gateway URL shown to users for reading their data."
+echo ""
+read -p "Public gateway URL [https://arweave.nexus]: " public_gateway_input
+PUBLIC_ACCESS_GATEWAY=${public_gateway_input:-https://arweave.nexus}
+echo -e "${GREEN}✓${NC} Public gateway set to: $PUBLIC_ACCESS_GATEWAY"
+
+echo ""
+
+# Free Upload Limit
+echo "Free Upload Limit:"
+echo "  Allow small uploads without payment (0 = all uploads require payment)"
+echo ""
+read -p "Free upload limit in bytes [0]: " free_limit_input
+FREE_UPLOAD_LIMIT=${free_limit_input:-0}
+if [ "$FREE_UPLOAD_LIMIT" == "0" ]; then
+  echo -e "${GREEN}✓${NC} All uploads will require x402 payment"
+else
+  echo -e "${GREEN}✓${NC} Free uploads up to $FREE_UPLOAD_LIMIT bytes"
+fi
+
+echo ""
+
+#############################
+# Step 6: Optional Features
+#############################
+echo -e "${CYAN}━━━ Step 6/6: Optional Features ━━━${NC}"
 echo ""
 
 # Allow-listed addresses
-echo "Allow-listed Addresses (comma-separated):"
+echo "Allow-listed Addresses:"
 echo "  These addresses can upload for free without payment."
 echo ""
-read -p "Allow-listed addresses (or Enter to skip): " ALLOW_LISTED_ADDRESSES
+read -p "Allow-listed addresses (comma-separated, or Enter to skip): " ALLOW_LISTED_ADDRESSES
+
+echo ""
+
+# Bundler Public URL
+echo "Bundler Public URL:"
+echo "  Your bundler's public URL (needed for AR.IO gateway integration)"
+echo ""
+read -p "Bundler public URL (e.g., https://upload.services.vilenarios.com): " BUNDLER_PUBLIC_URL
 
 echo ""
 
 # AR.IO Gateway Integration
 echo "AR.IO Gateway Integration:"
 echo "  Enables optimistic caching to your AR.IO gateway."
+echo "  This configures both bundler → gateway and gateway → bundler integration."
 echo ""
 read -p "Enable AR.IO gateway integration? (y/N): " enable_ario
 
 if [[ "$enable_ario" =~ ^[Yy]$ ]]; then
   read -p "AR.IO Gateway URL [http://localhost:4000]: " ario_url
-  OPTICAL_BRIDGE_URL="${ario_url:-http://localhost:4000}/ar-io/admin/queue-data-item"
+  ARIO_GATEWAY_URL="${ario_url:-http://localhost:4000}"
+  OPTICAL_BRIDGE_URL="${ARIO_GATEWAY_URL}/ar-io/admin/queue-data-item"
 
   read -p "AR.IO Admin Key: " AR_IO_ADMIN_KEY
 
   echo -e "${GREEN}✓${NC} AR.IO gateway integration enabled"
+
+  # Ask if they want to auto-configure the gateway
+  if [ -n "$ARWEAVE_OWNER_ADDRESS" ]; then
+    echo ""
+    echo "Gateway Auto-Configuration:"
+    echo "  Would you like to automatically update your AR.IO gateway's .env?"
+    echo "  This will add bundler integration settings to the gateway."
+    echo ""
+    read -p "Path to AR.IO gateway directory (e.g., /programs/ar-io-node) or Enter to skip: " ARIO_GATEWAY_DIR
+
+    if [ -n "$ARIO_GATEWAY_DIR" ]; then
+      # Expand ~ to home directory
+      ARIO_GATEWAY_DIR="${ARIO_GATEWAY_DIR/#\~/$HOME}"
+
+      if [ -d "$ARIO_GATEWAY_DIR" ]; then
+        CONFIGURE_GATEWAY="true"
+        echo -e "${GREEN}✓${NC} Will configure gateway at: $ARIO_GATEWAY_DIR"
+      else
+        echo -e "${YELLOW}⚠️${NC}  Directory not found. Skipping gateway configuration."
+        CONFIGURE_GATEWAY="false"
+      fi
+    else
+      CONFIGURE_GATEWAY="false"
+    fi
+  else
+    CONFIGURE_GATEWAY="false"
+  fi
 else
   OPTICAL_BRIDGE_URL=""
   AR_IO_ADMIN_KEY=""
+  CONFIGURE_GATEWAY="false"
 fi
 
 echo ""
@@ -352,6 +440,14 @@ X402_PRICING_BUFFER_PERCENT=${X402_PRICING_BUFFER_PERCENT}
 X402_PAYMENT_TIMEOUT_MS=${X402_PAYMENT_TIMEOUT_MS}
 
 #############################################
+# Info Endpoint Configuration
+#############################################
+# Ethereum address shown in info endpoint (uses x402 payment address)
+ETHEREUM_ADDRESS=${X402_PAYMENT_ADDRESS}
+# Free upload limit in bytes (0 = all uploads require payment)
+FREE_UPLOAD_LIMIT=${FREE_UPLOAD_LIMIT}
+
+#############################################
 # Bundling Configuration
 #############################################
 MAX_DATA_ITEM_SIZE=${MAX_DATA_ITEM_SIZE}
@@ -398,6 +494,68 @@ echo -e "${GREEN}✓${NC} .env file created successfully"
 echo ""
 
 #############################
+# Configure AR.IO Gateway
+#############################
+if [ "$CONFIGURE_GATEWAY" == "true" ]; then
+  echo -e "${CYAN}━━━ Configuring AR.IO Gateway ━━━${NC}"
+  echo ""
+
+  GATEWAY_ENV_FILE="$ARIO_GATEWAY_DIR/.env"
+
+  if [ ! -f "$GATEWAY_ENV_FILE" ]; then
+    echo -e "${RED}✗${NC} Gateway .env file not found at: $GATEWAY_ENV_FILE"
+    echo "   Skipping gateway configuration"
+  else
+    # Backup gateway .env
+    cp "$GATEWAY_ENV_FILE" "$GATEWAY_ENV_FILE.backup.$(date +%s)"
+    echo -e "${GREEN}✓${NC} Backed up gateway .env file"
+
+    # Remove old bundler integration settings if they exist
+    sed -i '/# Bundler integration/,/^$/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+    sed -i '/ANS104_UNBUNDLE_FILTER/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+    sed -i '/ANS104_INDEX_FILTER/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+    sed -i '/AWS_S3_CONTIGUOUS_DATA_BUCKET/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+    sed -i '/AWS_S3_CONTIGUOUS_DATA_PREFIX/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+    sed -i '/BUNDLER_URLS/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+
+    # Add bundler integration settings
+    cat >> "$GATEWAY_ENV_FILE" << GATEWAY_EOF
+
+# Bundler integration - Added by ar-io-x402-bundler setup
+# Only unbundle bundles from this bundler's Arweave address
+ANS104_UNBUNDLE_FILTER='{"attributes": {"owner_address": "$ARWEAVE_OWNER_ADDRESS"}}'
+
+# Always index data items from bundles
+ANS104_INDEX_FILTER='{"always": true}'
+
+# S3 bucket for contiguous data (raw data items)
+AWS_S3_CONTIGUOUS_DATA_BUCKET=${DATA_ITEM_BUCKET}
+AWS_S3_CONTIGUOUS_DATA_PREFIX=raw-data-item
+
+# Bundler URL for uploads
+BUNDLER_URLS=${BUNDLER_PUBLIC_URL}
+
+GATEWAY_EOF
+
+    echo -e "${GREEN}✓${NC} Updated gateway .env with bundler integration"
+    echo ""
+    echo -e "${YELLOW}IMPORTANT:${NC} You need to manually update these gateway settings:"
+    echo ""
+    echo "1. Add 's3' to ON_DEMAND_RETRIEVAL_ORDER:"
+    echo "   ON_DEMAND_RETRIEVAL_ORDER=s3,trusted-gateways,ar-io-network,chunks-offset-aware,tx-data"
+    echo ""
+    echo "2. If not already set, configure AWS/MinIO connection:"
+    echo "   AWS_ENDPOINT=http://ar-io-bundler-minio:9000"
+    echo "   AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+    echo "   AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+    echo "   AWS_REGION=$AWS_REGION"
+    echo ""
+    echo "3. Restart your AR.IO gateway to apply changes"
+    echo ""
+  fi
+fi
+
+#############################
 # Summary
 #############################
 clear
@@ -421,7 +579,11 @@ echo ""
 
 echo "Arweave:"
 echo "  • Wallet: $ARWEAVE_WALLET_FILE"
-echo "  • Gateway: $ARWEAVE_GATEWAY"
+if [ -n "$ARWEAVE_OWNER_ADDRESS" ]; then
+  echo "  • Address: $ARWEAVE_OWNER_ADDRESS"
+fi
+echo "  • Gateway (posting): $ARWEAVE_GATEWAY"
+echo "  • Gateway (public): $PUBLIC_ACCESS_GATEWAY"
 echo ""
 
 echo "Payment:"
@@ -429,22 +591,38 @@ echo "  • Your Address: $X402_PAYMENT_ADDRESS"
 if [ "$NETWORK_TYPE" == "mainnet" ]; then
   echo "  • CDP Configured: Yes"
 fi
+if [ "$FREE_UPLOAD_LIMIT" == "0" ]; then
+  echo "  • Free Uploads: Disabled (all uploads require payment)"
+else
+  echo "  • Free Upload Limit: $FREE_UPLOAD_LIMIT bytes"
+fi
 echo ""
 
 echo "Admin Dashboard:"
+echo "  • URL: http://localhost:$BULL_BOARD_PORT"
 echo "  • Username: $ADMIN_USERNAME"
 echo "  • Password: $ADMIN_PASSWORD"
-echo "  • Port: $BULL_BOARD_PORT"
 echo ""
+
+if [ -n "$BUNDLER_PUBLIC_URL" ]; then
+  echo "Bundler:"
+  echo "  • Public URL: $BUNDLER_PUBLIC_URL"
+  echo ""
+fi
 
 if [ -n "$ALLOW_LISTED_ADDRESSES" ]; then
   echo "Optional Features:"
   echo "  • Allow-listed: $ALLOW_LISTED_ADDRESSES"
 fi
 
-if [ "$OPTICAL_BRIDGING_ENABLED" == "true" ]; then
-  echo "  • AR.IO Gateway: Enabled"
-  echo "    URL: $OPTICAL_BRIDGE_URL"
+if [ -n "$OPTICAL_BRIDGE_URL" ]; then
+  echo "AR.IO Gateway Integration:"
+  echo "  • Enabled: Yes"
+  echo "  • Gateway URL: $ARIO_GATEWAY_URL"
+  echo "  • Bridge URL: $OPTICAL_BRIDGE_URL"
+  if [ "$CONFIGURE_GATEWAY" == "true" ]; then
+    echo "  • Gateway configured: Yes (at $ARIO_GATEWAY_DIR)"
+  fi
 fi
 
 echo ""
