@@ -407,7 +407,7 @@ export interface X402NetworkConfig {
   chainId: number;
   usdcAddress: string;
   rpcUrl: string;
-  facilitatorUrl?: string;
+  facilitatorUrls?: string[];  // Multiple facilitators for fallback (primary → fallback)
   enabled: boolean;
   minConfirmations: number;
 }
@@ -418,7 +418,10 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     chainId: 8453,
     usdcAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     rpcUrl: process.env.BASE_MAINNET_RPC_URL || "https://mainnet.base.org",
-    facilitatorUrl: process.env.X402_FACILITATOR_URL_BASE,
+    facilitatorUrls: [
+      process.env.X402_FACILITATOR_URL_BASE || "https://api.cdp.coinbase.com/platform/v2/x402",
+      "https://facilitator.mogami.tech", // Fallback
+    ].filter(Boolean),
     enabled: process.env.X402_BASE_ENABLED !== "false",
     minConfirmations: +(process.env.X402_BASE_MIN_CONFIRMATIONS || 1),
   },
@@ -427,7 +430,10 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     chainId: 8453,
     usdcAddress: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
     rpcUrl: process.env.BASE_MAINNET_RPC_URL || "https://mainnet.base.org",
-    facilitatorUrl: process.env.X402_FACILITATOR_URL_BASE,
+    facilitatorUrls: [
+      process.env.X402_FACILITATOR_URL_BASE || "https://api.cdp.coinbase.com/platform/v2/x402",
+      "https://facilitator.mogami.tech", // Fallback
+    ].filter(Boolean),
     enabled: process.env.X402_BASE_ENABLED !== "false",
     minConfirmations: +(process.env.X402_BASE_MIN_CONFIRMATIONS || 1),
   },
@@ -436,7 +442,9 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     usdcAddress: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
     rpcUrl:
       process.env.ETHEREUM_MAINNET_RPC_URL || "https://cloudflare-eth.com/",
-    facilitatorUrl: process.env.X402_FACILITATOR_URL_ETH,
+    facilitatorUrls: process.env.X402_FACILITATOR_URL_ETH
+      ? [process.env.X402_FACILITATOR_URL_ETH]
+      : undefined,
     enabled: process.env.X402_ETH_ENABLED === "true", // Default: false (enable Base first)
     minConfirmations: +(process.env.X402_ETH_MIN_CONFIRMATIONS || 3),
   },
@@ -444,7 +452,9 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     chainId: 137,
     usdcAddress: "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359",
     rpcUrl: process.env.POLYGON_MAINNET_RPC_URL || "https://polygon-rpc.com/",
-    facilitatorUrl: process.env.X402_FACILITATOR_URL_POLYGON,
+    facilitatorUrls: process.env.X402_FACILITATOR_URL_POLYGON
+      ? [process.env.X402_FACILITATOR_URL_POLYGON]
+      : undefined,
     enabled: process.env.X402_POLYGON_ENABLED === "true", // Default: false
     minConfirmations: +(process.env.X402_POLYGON_MIN_CONFIRMATIONS || 10),
   },
@@ -452,7 +462,9 @@ export const x402Networks: Record<string, X402NetworkConfig> = {
     chainId: 84532,
     usdcAddress: "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
     rpcUrl: process.env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org",
-    facilitatorUrl: process.env.X402_FACILITATOR_URL_BASE_TESTNET,
+    facilitatorUrls: process.env.X402_FACILITATOR_URL_BASE_TESTNET
+      ? [process.env.X402_FACILITATOR_URL_BASE_TESTNET]
+      : ["https://facilitator.mogami.tech"], // Mogami works on testnet
     enabled: process.env.X402_BASE_TESTNET_ENABLED === "true",
     minConfirmations: 1,
   },

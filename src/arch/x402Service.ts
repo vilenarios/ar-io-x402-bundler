@@ -217,17 +217,49 @@ export class X402Service {
         };
       }
 
-      // If facilitator URL provided, use it for additional verification
+      // If facilitator URLs provided, try each for additional verification
       const networkConfig = this.networks[paymentPayload.network];
-      if (networkConfig?.facilitatorUrl) {
-        const facilitatorResult = await this.verifyWithFacilitator(
-          paymentHeader,
-          requirements,
-          networkConfig.facilitatorUrl
-        );
+      const facilitatorUrls = networkConfig?.facilitatorUrls || [];
 
-        if (!facilitatorResult.isValid) {
-          return facilitatorResult;
+      if (facilitatorUrls.length > 0) {
+        // Try each facilitator until one succeeds
+        let verificationSucceeded = false;
+        const errors: string[] = [];
+
+        for (const facilitatorUrl of facilitatorUrls) {
+          const facilitatorResult = await this.verifyWithFacilitator(
+            paymentHeader,
+            requirements,
+            facilitatorUrl
+          );
+
+          if (facilitatorResult.isValid) {
+            // Verification succeeded!
+            verificationSucceeded = true;
+            logger.debug("Facilitator verification succeeded", {
+              facilitator: facilitatorUrl,
+            });
+            break;
+          } else {
+            // Try next facilitator
+            errors.push(`${facilitatorUrl}: ${facilitatorResult.invalidReason}`);
+            logger.warn("Facilitator verification failed, trying next", {
+              facilitator: facilitatorUrl,
+              error: facilitatorResult.invalidReason,
+            });
+          }
+        }
+
+        // If all facilitators failed, return error
+        if (!verificationSucceeded) {
+          logger.error("All facilitators failed verification", {
+            facilitatorCount: facilitatorUrls.length,
+            errors,
+          });
+          return {
+            isValid: false,
+            invalidReason: `All facilitators failed: ${errors.join("; ")}`,
+          };
         }
       }
 
@@ -249,14 +281,13 @@ export class X402Service {
   }
 
   /**
-   * Settle an x402 payment on-chain
+   * Settle an x402 payment on-chain with multi-facilitator fallback
    */
   async settlePayment(
     paymentHeader: string,
     requirements: X402PaymentRequirements
   ): Promise<X402SettlementResult> {
     try {
-      // Parse payload to get network config, but send original header to facilitator
       const paymentPayload: X402PaymentPayload = JSON.parse(
         Buffer.from(paymentHeader, "base64").toString("utf-8")
       );
@@ -270,149 +301,73 @@ export class X402Service {
         };
       }
 
-      // If facilitator URL provided, use it for settlement
-      if (networkConfig.facilitatorUrl) {
-        logger.info("Settling x402 payment via facilitator", {
+      // Get facilitator URLs
+      const facilitatorUrls = networkConfig.facilitatorUrls || [];
+
+      if (facilitatorUrls.length === 0) {
+        logger.warn("No facilitators configured - settlement not possible", {
           network: paymentPayload.network,
-          facilitator: networkConfig.facilitatorUrl,
         });
+        return {
+          success: false,
+          error: "No facilitators configured for this network",
+        };
+      }
+
+      logger.info("Settling x402 payment with multi-facilitator fallback", {
+        network: paymentPayload.network,
+        facilitatorCount: facilitatorUrls.length,
+        facilitators: facilitatorUrls,
+      });
+
+      // Try each facilitator sequentially until one succeeds
+      const errors: string[] = [];
+      for (let i = 0; i < facilitatorUrls.length; i++) {
+        const facilitatorUrl = facilitatorUrls[i];
 
         try {
-          const isCoinbaseFacilitator = networkConfig.facilitatorUrl.includes("api.cdp.coinbase.com");
-          const isCommunityFacilitator = networkConfig.facilitatorUrl.includes("x402.rs");
-
-          logger.info("Settling x402 payment via facilitator", {
-            facilitator: networkConfig.facilitatorUrl,
+          logger.info(`Attempting settlement with facilitator ${i + 1}/${facilitatorUrls.length}`, {
+            facilitator: facilitatorUrl,
             network: paymentPayload.network,
-            isCoinbaseFacilitator,
-            isCommunityFacilitator,
           });
 
-          // Use SDK for Coinbase facilitator
-          if (isCoinbaseFacilitator) {
-            try {
-              logger.info("Settling x402 payment with Coinbase facilitator SDK", {
-                url: networkConfig.facilitatorUrl,
-                network: paymentPayload.network,
-              });
-
-              // Convert timestamps to strings for Coinbase
-              const coinbasePayload = toCoinbaseFormat(paymentPayload);
-              const result = await coinbaseFacilitator.settle(coinbasePayload, requirements);
-
-              if (result.transaction) {
-                logger.info("X402 payment settled via Coinbase SDK", {
-                  transactionHash: result.transaction,
-                  network: paymentPayload.network,
-                });
-                return { success: true, transactionHash: result.transaction };
-              } else {
-                logger.error("Coinbase SDK settlement failed - no transaction hash");
-                return { success: false, error: "settlement_failed" };
-              }
-            } catch (error: any) {
-              logger.error("Coinbase SDK settlement failed", {
-                error: error.message,
-                stack: error.stack,
-              });
-              return { success: false, error: error.message || "settlement_failed" };
-            }
-          }
-
-          // Community facilitator: manual request with string timestamps
-          if (isCommunityFacilitator && paymentPayload.payload?.authorization) {
-            const auth = paymentPayload.payload.authorization as any;
-            if (typeof auth.validAfter === "number") {
-              auth.validAfter = auth.validAfter.toString();
-            }
-            if (typeof auth.validBefore === "number") {
-              auth.validBefore = auth.validBefore.toString();
-            }
-          }
-
-          const requestPayload = isCommunityFacilitator
-            ? {
-                x402Version: 1,
-                paymentPayload,
-                paymentRequirements: requirements,
-              }
-            : {
-                x402Version: 1,
-                paymentHeader,
-                paymentRequirements: requirements,
-              };
-
-          const response = await axios.post(
-            `${networkConfig.facilitatorUrl}/settle`,
-            requestPayload,
-            {
-              headers: { "Content-Type": "application/json" },
-              timeout: 180000,
-              validateStatus: () => true,
-            }
+          const result = await this.settleWithSingleFacilitator(
+            paymentPayload,
+            requirements,
+            facilitatorUrl
           );
 
-          if (response.status !== 200) {
-            const errorMsg =
-              response.data?.error ||
-              response.data?.message ||
-              response.statusText;
-            logger.error("Facilitator settlement failed", {
-              status: response.status,
-              error: errorMsg,
-              responseData: response.data, // Log full response for debugging
+          if (result.success) {
+            logger.info(`Settlement succeeded with facilitator ${i + 1}/${facilitatorUrls.length}`, {
+              facilitator: facilitatorUrl,
+              transactionHash: result.transactionHash,
             });
-            return { success: false, error: errorMsg };
-          }
-
-          const result = response.data;
-
-          // Facilitator returns "transaction" field, not "transactionHash"
-          const txHash = result.transaction || result.transactionHash;
-
-          logger.info("X402 payment settled via facilitator", {
-            txHash,
-            network: result.network,
-          });
-
-          // Check if transaction hash is present
-          if (!txHash) {
-            logger.warn("Facilitator did not return transaction hash", {
-              result,
+            return result;
+          } else {
+            errors.push(`${facilitatorUrl}: ${result.error}`);
+            logger.warn(`Facilitator ${i + 1} failed, trying next`, {
+              facilitator: facilitatorUrl,
+              error: result.error,
             });
-            return {
-              success: false,
-              error:
-                "Facilitator settlement succeeded but did not return transaction hash",
-            };
           }
-
-          return {
-            success: true,
-            transactionHash: txHash,
-            network: result.network,
-          };
-        } catch (axiosError: any) {
-          logger.error("Facilitator request failed", {
-            error: axiosError.message,
-            response: axiosError.response?.data,
-            status: axiosError.response?.status,
+        } catch (error: any) {
+          errors.push(`${facilitatorUrl}: ${error.message}`);
+          logger.error(`Facilitator ${i + 1} threw error, trying next`, {
+            facilitator: facilitatorUrl,
+            error: error.message,
           });
-          return {
-            success: false,
-            error: axiosError.response?.data?.message || axiosError.message,
-          };
         }
       }
 
-      // Otherwise, settle locally (requires wallet setup)
-      logger.warn(
-        "Local settlement not implemented - facilitator URL required",
-        { network: paymentPayload.network }
-      );
+      // All facilitators failed
+      logger.error("All facilitators failed for settlement", {
+        network: paymentPayload.network,
+        errors,
+      });
+
       return {
         success: false,
-        error: "Local settlement not implemented - facilitator URL required",
+        error: `All facilitators failed: ${errors.join("; ")}`,
       };
     } catch (error) {
       logger.error("X402 payment settlement failed", { error });
@@ -421,6 +376,148 @@ export class X402Service {
         error: error instanceof Error ? error.message : "Settlement error",
       };
     }
+  }
+
+  /**
+   * Settle payment with a single facilitator (internal helper)
+   */
+  private async settleWithSingleFacilitator(
+    paymentPayload: X402PaymentPayload,
+    requirements: X402PaymentRequirements,
+    facilitatorUrl: string
+  ): Promise<X402SettlementResult> {
+    const isCoinbaseFacilitator = facilitatorUrl.includes("api.cdp.coinbase.com");
+    const isCommunityFacilitator = facilitatorUrl.includes("x402.rs") || facilitatorUrl.includes("mogami.tech");
+
+    logger.info("Settling x402 payment via facilitator", {
+      facilitator: facilitatorUrl,
+      network: paymentPayload.network,
+      isCoinbaseFacilitator,
+      isCommunityFacilitator,
+    });
+
+    // Clone payload to avoid mutating original (important for fallback retries)
+    const clonedPayload = JSON.parse(JSON.stringify(paymentPayload));
+
+    // Prepare timestamps - convert to strings for facilitators
+    if (clonedPayload.payload?.authorization) {
+      const auth = clonedPayload.payload.authorization as any;
+      if (typeof auth.validAfter === "number") {
+        auth.validAfter = auth.validAfter.toString();
+      }
+      if (typeof auth.validBefore === "number") {
+        auth.validBefore = auth.validBefore.toString();
+      }
+    }
+
+    // Use SDK for Coinbase facilitator
+    if (isCoinbaseFacilitator) {
+      try {
+        logger.info("Settling x402 payment with Coinbase facilitator SDK", {
+          url: facilitatorUrl,
+          network: clonedPayload.network,
+        });
+
+        // Convert timestamps to strings for Coinbase
+        const coinbasePayload = toCoinbaseFormat(clonedPayload);
+        const result = await coinbaseFacilitator.settle(coinbasePayload, requirements);
+
+        if (result.transaction) {
+          logger.info("X402 payment settled via Coinbase SDK", {
+            transactionHash: result.transaction,
+            network: clonedPayload.network,
+          });
+          return {
+            success: true,
+            transactionHash: result.transaction,
+            network: clonedPayload.network,
+          };
+        } else {
+          logger.error("Coinbase SDK settlement failed - no transaction hash");
+          return { success: false, error: "settlement_failed" };
+        }
+      } catch (error: any) {
+        logger.error("Coinbase SDK settlement failed", {
+          error: error.message,
+          stack: error.stack,
+        });
+        return { success: false, error: error.message || "settlement_failed" };
+      }
+    }
+
+    // Community facilitator: manual request
+    const requestPayload = {
+      x402Version: 1,
+      paymentPayload: clonedPayload,
+      paymentRequirements: requirements,
+    };
+
+    // Add Coinbase auth headers if using Coinbase facilitator
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+
+    if (isCoinbaseFacilitator) {
+      try {
+        const authHeaders = await coinbaseFacilitatorConfig.createAuthHeaders();
+        Object.assign(headers, authHeaders.settle || {});
+      } catch (error) {
+        logger.warn("Failed to create Coinbase auth headers, trying without", { error });
+      }
+    }
+
+    // Make settlement request with 60 second timeout (longer than SDK default)
+    const response = await axios.post(
+      `${facilitatorUrl}/settle`,
+      requestPayload,
+      {
+        headers,
+        timeout: 60000, // 60 seconds - increased from SDK's ~10s default
+        validateStatus: () => true,
+      }
+    );
+
+    if (response.status !== 200) {
+      const errorMsg =
+        response.data?.error ||
+        response.data?.errorMessage ||
+        response.data?.message ||
+        response.statusText;
+      logger.error("Facilitator settlement failed", {
+        facilitator: facilitatorUrl,
+        status: response.status,
+        error: errorMsg,
+        responseData: response.data,
+      });
+      return { success: false, error: errorMsg || `HTTP ${response.status}` };
+    }
+
+    const result = response.data;
+
+    // Facilitator returns "transaction" field, not "transactionHash"
+    const txHash = result.transaction || result.transactionHash;
+
+    // Check if transaction hash is present
+    if (!txHash) {
+      logger.warn("Facilitator did not return transaction hash", {
+        facilitator: facilitatorUrl,
+        result,
+      });
+      return {
+        success: false,
+        error: "Facilitator settlement succeeded but did not return transaction hash",
+      };
+    }
+
+    logger.info("X402 payment settled via facilitator", {
+      facilitator: facilitatorUrl,
+      txHash,
+      network: result.network || clonedPayload.network,
+    });
+
+    return {
+      success: true,
+      transactionHash: txHash,
+      network: clonedPayload.network,
+    };
   }
 
   /**
