@@ -578,6 +578,7 @@ FREE_UPLOAD_LIMIT=${FREE_UPLOAD_LIMIT}
 #############################################
 MAX_DATA_ITEM_SIZE=${MAX_DATA_ITEM_SIZE}
 MAX_BUNDLE_SIZE=${MAX_BUNDLE_SIZE}
+APP_NAME=AR.IO Bundler
 OPTICAL_BRIDGING_ENABLED=${OPTICAL_BRIDGING_ENABLED}
 
 #############################################
@@ -592,6 +593,13 @@ else
 fi
 
 cat >> .env << EOF
+
+#############################################
+# Optional: Raw Data Uploads
+#############################################
+# Enable raw data uploads (for AI agents that can't create ANS-104 data items)
+# RAW_DATA_UPLOADS_ENABLED=true
+# RAW_DATA_ITEM_JWK_FILE=/absolute/path/to/your/raw-data-wallet.json
 
 #############################################
 # Optional: AR.IO Gateway Integration
