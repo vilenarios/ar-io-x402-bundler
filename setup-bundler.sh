@@ -260,18 +260,55 @@ done
 echo ""
 
 #############################
-# Step 5: Optional Settings
+# Step 5: Gateway Configuration
 #############################
-echo -e "${CYAN}━━━ Step 5/6: Gateway Configuration ━━━${NC}"
+echo -e "${CYAN}━━━ Step 5/7: Gateway Configuration ━━━${NC}"
 echo ""
 
-# Public Access Gateway
-echo "Public Access Gateway:"
-echo "  This is the gateway URL shown to users for reading their data."
+# Public Access Gateway - Better explanation
+echo "Where should users READ their uploaded data from?"
 echo ""
-read -p "Public gateway URL [https://arweave.nexus]: " public_gateway_input
-PUBLIC_ACCESS_GATEWAY=${public_gateway_input:-https://arweave.nexus}
-echo -e "${GREEN}✓${NC} Public gateway set to: $PUBLIC_ACCESS_GATEWAY"
+echo "After uploading to your bundler, users need a gateway to read their data."
+echo "This URL is shown in the /info endpoint."
+echo ""
+echo "  1) My own AR.IO gateway (recommended if you're running one)"
+echo "  2) arweave.net (Arweave mainnet - reliable but centralized)"
+echo "  3) Custom gateway URL"
+echo ""
+
+while true; do
+  read -p "Select option (1, 2, or 3) [1]: " gateway_choice
+  gateway_choice=${gateway_choice:-1}
+
+  if [[ "$gateway_choice" == "1" ]]; then
+    read -p "Your gateway's public URL (e.g., https://arweave.nexus): " gateway_url_input
+    if [ -z "$gateway_url_input" ]; then
+      echo -e "${RED}✗ Gateway URL cannot be empty${NC}"
+      continue
+    fi
+    PUBLIC_ACCESS_GATEWAY="$gateway_url_input"
+    USING_OWN_GATEWAY="true"
+    echo -e "${GREEN}✓${NC} Using your gateway: $PUBLIC_ACCESS_GATEWAY"
+    break
+  elif [[ "$gateway_choice" == "2" ]]; then
+    PUBLIC_ACCESS_GATEWAY="https://arweave.net"
+    USING_OWN_GATEWAY="false"
+    echo -e "${GREEN}✓${NC} Using Arweave mainnet: $PUBLIC_ACCESS_GATEWAY"
+    break
+  elif [[ "$gateway_choice" == "3" ]]; then
+    read -p "Enter custom gateway URL: " custom_gateway
+    if [ -z "$custom_gateway" ]; then
+      echo -e "${RED}✗ Gateway URL cannot be empty${NC}"
+      continue
+    fi
+    PUBLIC_ACCESS_GATEWAY="$custom_gateway"
+    USING_OWN_GATEWAY="false"
+    echo -e "${GREEN}✓${NC} Using custom gateway: $PUBLIC_ACCESS_GATEWAY"
+    break
+  else
+    echo -e "${RED}Invalid choice. Please enter 1, 2, or 3.${NC}"
+  fi
+done
 
 echo ""
 
@@ -290,9 +327,156 @@ fi
 echo ""
 
 #############################
-# Step 6: Optional Features
+# Step 6: Gateway Integration
 #############################
-echo -e "${CYAN}━━━ Step 6/6: Optional Features ━━━${NC}"
+if [ "$USING_OWN_GATEWAY" == "true" ]; then
+  echo -e "${CYAN}━━━ Step 6/7: AR.IO Gateway Integration ━━━${NC}"
+  echo ""
+  echo "Let's configure vertical integration between your bundler and gateway."
+  echo ""
+
+  read -p "Enable AR.IO gateway integration? (Y/n): " enable_ario
+  enable_ario=${enable_ario:-Y}
+
+  if [[ "$enable_ario" =~ ^[Yy]$ ]]; then
+    echo ""
+    echo "Deployment Topology:"
+    echo "  1) Same server - bundler and gateway on same machine"
+    echo "  2) Different servers - bundler and gateway on different machines"
+    echo ""
+
+    while true; do
+      read -p "Select deployment (1 or 2) [1]: " deployment_choice
+      deployment_choice=${deployment_choice:-1}
+
+      if [[ "$deployment_choice" == "1" ]]; then
+        DEPLOYMENT_TYPE="same-server"
+        echo -e "${GREEN}✓${NC} Same server deployment"
+        echo ""
+
+        echo "Are the bundler and gateway in the same Docker network?"
+        echo "  (They can communicate via container names)"
+        echo ""
+        read -p "Same Docker network? (Y/n): " same_network
+        same_network=${same_network:-Y}
+
+        if [[ "$same_network" =~ ^[Yy]$ ]]; then
+          SAME_DOCKER_NETWORK="true"
+          echo ""
+          read -p "Gateway container/service name [ar-io-core]: " gateway_container
+          GATEWAY_CONTAINER_NAME=${gateway_container:-ar-io-core}
+
+          # Set URLs for same Docker network
+          ARIO_GATEWAY_URL="http://${GATEWAY_CONTAINER_NAME}:4000"
+          GATEWAY_MINIO_ENDPOINT="http://minio:9000"
+
+          echo -e "${GREEN}✓${NC} Gateway URL: $ARIO_GATEWAY_URL"
+          echo -e "${GREEN}✓${NC} MinIO endpoint (for gateway): $GATEWAY_MINIO_ENDPOINT"
+        else
+          SAME_DOCKER_NETWORK="false"
+          echo ""
+          echo -e "${YELLOW}Different Docker networks - you'll need to use host networking${NC}"
+          ARIO_GATEWAY_URL="http://host.docker.internal:4000"
+          GATEWAY_MINIO_ENDPOINT="http://host.docker.internal:9000"
+          echo -e "${GREEN}✓${NC} Gateway URL: $ARIO_GATEWAY_URL"
+          echo -e "${GREEN}✓${NC} MinIO endpoint (for gateway): $GATEWAY_MINIO_ENDPOINT"
+        fi
+        break
+
+      elif [[ "$deployment_choice" == "2" ]]; then
+        DEPLOYMENT_TYPE="different-servers"
+        SAME_DOCKER_NETWORK="false"
+        echo -e "${GREEN}✓${NC} Different servers deployment"
+        echo ""
+
+        read -p "Gateway server hostname/IP: " gateway_host
+        read -p "Gateway port [4000]: " gateway_port
+        gateway_port=${gateway_port:-4000}
+
+        ARIO_GATEWAY_URL="http://${gateway_host}:${gateway_port}"
+
+        echo ""
+        echo -e "${YELLOW}⚠️  For remote gateway integration, you need to:${NC}"
+        echo "  1. Expose MinIO publicly or via VPN"
+        echo "  2. Configure firewall rules between servers"
+        echo ""
+
+        read -p "Public MinIO endpoint (e.g., https://minio.yourdomain.com:9000): " minio_endpoint
+        GATEWAY_MINIO_ENDPOINT="$minio_endpoint"
+
+        echo -e "${GREEN}✓${NC} Gateway URL: $ARIO_GATEWAY_URL"
+        echo -e "${GREEN}✓${NC} MinIO endpoint (for gateway): $GATEWAY_MINIO_ENDPOINT"
+        break
+
+      else
+        echo -e "${RED}Invalid choice. Please enter 1 or 2.${NC}"
+      fi
+    done
+
+    echo ""
+    OPTICAL_BRIDGE_URL="${ARIO_GATEWAY_URL}/ar-io/admin/queue-data-item"
+
+    read -p "AR.IO Admin Key: " AR_IO_ADMIN_KEY
+    echo ""
+
+    # Ask for bundler public URL ONLY if gateway integration is enabled
+    echo "Bundler Public URL:"
+    echo "  What public URL will users access this bundler at?"
+    echo "  (e.g., https://upload.services.vilenarios.com)"
+    echo ""
+    read -p "Bundler public URL: " BUNDLER_PUBLIC_URL
+
+    while [ -z "$BUNDLER_PUBLIC_URL" ]; do
+      echo -e "${YELLOW}⚠️  Bundler public URL is required for gateway integration${NC}"
+      read -p "Bundler public URL: " BUNDLER_PUBLIC_URL
+    done
+
+    echo -e "${GREEN}✓${NC} Bundler public URL: $BUNDLER_PUBLIC_URL"
+    echo ""
+
+    # Gateway auto-configuration
+    if [ -n "$ARWEAVE_OWNER_ADDRESS" ]; then
+      echo "Gateway Auto-Configuration:"
+      echo "  Would you like to automatically update your AR.IO gateway's .env?"
+      echo ""
+      read -p "Path to AR.IO gateway directory (e.g., /programs/ar-io-node) or Enter to skip: " ARIO_GATEWAY_DIR
+
+      if [ -n "$ARIO_GATEWAY_DIR" ]; then
+        ARIO_GATEWAY_DIR="${ARIO_GATEWAY_DIR/#\~/$HOME}"
+
+        if [ -d "$ARIO_GATEWAY_DIR" ]; then
+          CONFIGURE_GATEWAY="true"
+          echo -e "${GREEN}✓${NC} Will configure gateway at: $ARIO_GATEWAY_DIR"
+        else
+          echo -e "${YELLOW}⚠️${NC}  Directory not found. Skipping auto-configuration."
+          CONFIGURE_GATEWAY="false"
+        fi
+      else
+        CONFIGURE_GATEWAY="false"
+      fi
+    else
+      CONFIGURE_GATEWAY="false"
+    fi
+  else
+    OPTICAL_BRIDGE_URL=""
+    AR_IO_ADMIN_KEY=""
+    BUNDLER_PUBLIC_URL=""
+    CONFIGURE_GATEWAY="false"
+  fi
+else
+  # Skip gateway integration if not using own gateway
+  OPTICAL_BRIDGE_URL=""
+  AR_IO_ADMIN_KEY=""
+  BUNDLER_PUBLIC_URL=""
+  CONFIGURE_GATEWAY="false"
+fi
+
+echo ""
+
+#############################
+# Step 7: Optional Features
+#############################
+echo -e "${CYAN}━━━ Step 7/7: Optional Features ━━━${NC}"
 echo ""
 
 # Allow-listed addresses
@@ -300,64 +484,6 @@ echo "Allow-listed Addresses:"
 echo "  These addresses can upload for free without payment."
 echo ""
 read -p "Allow-listed addresses (comma-separated, or Enter to skip): " ALLOW_LISTED_ADDRESSES
-
-echo ""
-
-# Bundler Public URL
-echo "Bundler Public URL:"
-echo "  Your bundler's public URL (needed for AR.IO gateway integration)"
-echo ""
-read -p "Bundler public URL (e.g., https://upload.services.vilenarios.com): " BUNDLER_PUBLIC_URL
-
-echo ""
-
-# AR.IO Gateway Integration
-echo "AR.IO Gateway Integration:"
-echo "  Enables optimistic caching to your AR.IO gateway."
-echo "  This configures both bundler → gateway and gateway → bundler integration."
-echo ""
-read -p "Enable AR.IO gateway integration? (y/N): " enable_ario
-
-if [[ "$enable_ario" =~ ^[Yy]$ ]]; then
-  read -p "AR.IO Gateway URL [http://localhost:4000]: " ario_url
-  ARIO_GATEWAY_URL="${ario_url:-http://localhost:4000}"
-  OPTICAL_BRIDGE_URL="${ARIO_GATEWAY_URL}/ar-io/admin/queue-data-item"
-
-  read -p "AR.IO Admin Key: " AR_IO_ADMIN_KEY
-
-  echo -e "${GREEN}✓${NC} AR.IO gateway integration enabled"
-
-  # Ask if they want to auto-configure the gateway
-  if [ -n "$ARWEAVE_OWNER_ADDRESS" ]; then
-    echo ""
-    echo "Gateway Auto-Configuration:"
-    echo "  Would you like to automatically update your AR.IO gateway's .env?"
-    echo "  This will add bundler integration settings to the gateway."
-    echo ""
-    read -p "Path to AR.IO gateway directory (e.g., /programs/ar-io-node) or Enter to skip: " ARIO_GATEWAY_DIR
-
-    if [ -n "$ARIO_GATEWAY_DIR" ]; then
-      # Expand ~ to home directory
-      ARIO_GATEWAY_DIR="${ARIO_GATEWAY_DIR/#\~/$HOME}"
-
-      if [ -d "$ARIO_GATEWAY_DIR" ]; then
-        CONFIGURE_GATEWAY="true"
-        echo -e "${GREEN}✓${NC} Will configure gateway at: $ARIO_GATEWAY_DIR"
-      else
-        echo -e "${YELLOW}⚠️${NC}  Directory not found. Skipping gateway configuration."
-        CONFIGURE_GATEWAY="false"
-      fi
-    else
-      CONFIGURE_GATEWAY="false"
-    fi
-  else
-    CONFIGURE_GATEWAY="false"
-  fi
-else
-  OPTICAL_BRIDGE_URL=""
-  AR_IO_ADMIN_KEY=""
-  CONFIGURE_GATEWAY="false"
-fi
 
 echo ""
 
@@ -518,17 +644,26 @@ if [ "$CONFIGURE_GATEWAY" == "true" ]; then
     sed -i '/AWS_S3_CONTIGUOUS_DATA_PREFIX/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
     sed -i '/BUNDLER_URLS/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
 
+    # Remove old AWS/MinIO settings if they exist
+    sed -i '/AWS_ENDPOINT=/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+    sed -i '/AWS_S3_CONTIGUOUS_DATA_BUCKET=/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+    sed -i '/AWS_S3_CONTIGUOUS_DATA_PREFIX=/d' "$GATEWAY_ENV_FILE" 2>/dev/null || true
+
     # Add bundler integration settings
     cat >> "$GATEWAY_ENV_FILE" << GATEWAY_EOF
 
-# Bundler integration - Added by ar-io-x402-bundler setup
+# Bundler integration - Added by ar-io-x402-bundler setup ($(date))
 # Only unbundle bundles from this bundler's Arweave address
 ANS104_UNBUNDLE_FILTER='{"attributes": {"owner_address": "$ARWEAVE_OWNER_ADDRESS"}}'
 
 # Always index data items from bundles
 ANS104_INDEX_FILTER='{"always": true}'
 
-# S3 bucket for contiguous data (raw data items)
+# S3/MinIO configuration for accessing bundler's data items
+AWS_ENDPOINT=${GATEWAY_MINIO_ENDPOINT}
+AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+AWS_REGION=${AWS_REGION}
 AWS_S3_CONTIGUOUS_DATA_BUCKET=${DATA_ITEM_BUCKET}
 AWS_S3_CONTIGUOUS_DATA_PREFIX=raw-data-item
 
@@ -539,18 +674,15 @@ GATEWAY_EOF
 
     echo -e "${GREEN}✓${NC} Updated gateway .env with bundler integration"
     echo ""
-    echo -e "${YELLOW}IMPORTANT:${NC} You need to manually update these gateway settings:"
+    echo -e "${YELLOW}IMPORTANT:${NC} You need to manually update this gateway setting:"
     echo ""
-    echo "1. Add 's3' to ON_DEMAND_RETRIEVAL_ORDER:"
+    echo "1. Add 's3' to the BEGINNING of ON_DEMAND_RETRIEVAL_ORDER:"
     echo "   ON_DEMAND_RETRIEVAL_ORDER=s3,trusted-gateways,ar-io-network,chunks-offset-aware,tx-data"
     echo ""
-    echo "2. If not already set, configure AWS/MinIO connection:"
-    echo "   AWS_ENDPOINT=http://ar-io-bundler-minio:9000"
-    echo "   AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
-    echo "   AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
-    echo "   AWS_REGION=$AWS_REGION"
+    echo "   This tells the gateway to check MinIO first for data items."
     echo ""
-    echo "3. Restart your AR.IO gateway to apply changes"
+    echo "2. Restart your AR.IO gateway to apply changes:"
+    echo "   cd $ARIO_GATEWAY_DIR && docker-compose restart"
     echo ""
   fi
 fi
@@ -629,15 +761,126 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
+#############################
+# Post-Setup Instructions
+#############################
+if [ -n "$BUNDLER_PUBLIC_URL" ]; then
+  echo -e "${BOLD}📋 NEXT STEPS - Post-Setup Guide${NC}"
+  echo ""
+  echo "To complete your bundler deployment, follow these steps:"
+  echo ""
+
+  echo -e "${CYAN}Step 1: Start the Bundler${NC}"
+  echo "  ./start-bundler.sh"
+  echo ""
+
+  echo -e "${CYAN}Step 2: Configure Nginx (Required for Public Access)${NC}"
+  echo ""
+  echo "  Add this to your nginx configuration to expose the bundler:"
+  echo ""
+  echo "  ${BOLD}# Bundler upload endpoint${NC}"
+  echo "  location /local/upload {"
+  echo "    proxy_pass http://localhost:3001;"
+  echo "    proxy_http_version 1.1;"
+  echo "    proxy_set_header Upgrade \$http_upgrade;"
+  echo "    proxy_set_header Connection 'upgrade';"
+  echo "    proxy_set_header Host \$host;"
+  echo "    proxy_set_header X-Real-IP \$remote_addr;"
+  echo "    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;"
+  echo "    proxy_set_header X-Forwarded-Proto \$scheme;"
+  echo ""
+  echo "    # Large file upload support"
+  echo "    client_max_body_size 10G;"
+  echo "    proxy_request_buffering off;"
+  echo "    proxy_read_timeout 300s;"
+  echo "    proxy_connect_timeout 75s;"
+  echo "  }"
+  echo ""
+  echo "  Then reload nginx:"
+  echo "    sudo nginx -t && sudo nginx -s reload"
+  echo ""
+
+  if [ -n "$OPTICAL_BRIDGE_URL" ]; then
+    echo -e "${CYAN}Step 3: Restart AR.IO Gateway${NC}"
+    echo "  Your gateway .env has been updated. Restart to apply changes:"
+    echo ""
+    if [ "$CONFIGURE_GATEWAY" == "true" ] && [ -n "$ARIO_GATEWAY_DIR" ]; then
+      echo "    cd $ARIO_GATEWAY_DIR && docker-compose restart"
+    else
+      echo "    cd /path/to/ar-io-node && docker-compose restart"
+    fi
+    echo ""
+
+    echo -e "${CYAN}Step 4: Test the Integration${NC}"
+    echo ""
+    echo "  a) Check bundler info endpoint:"
+    echo "     curl ${BUNDLER_PUBLIC_URL}/"
+    echo ""
+    echo "  b) Check gateway can reach bundler:"
+    echo "     curl ${PUBLIC_ACCESS_GATEWAY}/local/upload/"
+    echo ""
+    echo "  c) Test upload (requires x402 payment):"
+    echo "     echo 'Hello AR.IO' | curl -X POST ${BUNDLER_PUBLIC_URL}/v1/tx \\
+      --data-binary @- \\
+      -H 'Content-Type: application/octet-stream'"
+    echo ""
+
+    if [ "$DEPLOYMENT_TYPE" == "same-server" ] && [ "$SAME_DOCKER_NETWORK" == "true" ]; then
+      echo -e "${CYAN}Step 5: Verify Docker Network${NC}"
+      echo "  Make sure bundler and gateway are in the same Docker network:"
+      echo ""
+      echo "  # List networks"
+      echo "  docker network ls"
+      echo ""
+      echo "  # Connect gateway to bundler network (if needed)"
+      echo "  docker network connect ar-io-x402-bundler_default ${GATEWAY_CONTAINER_NAME}"
+      echo ""
+    fi
+
+    if [ "$DEPLOYMENT_TYPE" == "different-servers" ]; then
+      echo -e "${CYAN}Step 5: Configure Firewall/Networking${NC}"
+      echo "  For remote gateway integration, ensure:"
+      echo ""
+      echo "  1. Gateway can reach bundler's optical bridge:"
+      echo "     ${OPTICAL_BRIDGE_URL}"
+      echo ""
+      echo "  2. Gateway can reach MinIO:"
+      echo "     ${GATEWAY_MINIO_ENDPOINT}"
+      echo ""
+      echo "  3. Firewall allows connections between servers"
+      echo ""
+    fi
+  fi
+
+  echo -e "${CYAN}Admin Dashboard${NC}"
+  echo "  Access at: http://localhost:${BULL_BOARD_PORT}"
+  echo "  Username: ${ADMIN_USERNAME}"
+  echo "  Password: ${ADMIN_PASSWORD}"
+  echo ""
+
+  echo -e "${YELLOW}⚠️  Important Security Notes:${NC}"
+  echo "  • Store your admin password securely"
+  echo "  • Keep your Arweave wallet file safe"
+  if [ "$NETWORK_TYPE" == "mainnet" ]; then
+    echo "  • Keep your CDP API credentials secure"
+  fi
+  echo "  • Use HTTPS in production (configure SSL in nginx)"
+  echo ""
+
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+fi
+
 # Offer to start bundler
 echo "What would you like to do next?"
 echo ""
 echo "  1) Start the bundler now (./start-bundler.sh)"
-echo "  2) Exit (start manually later)"
+echo "  2) Show post-setup guide again"
+echo "  3) Exit (start manually later)"
 echo ""
 
 while true; do
-  read -p "Choose option (1 or 2) [1]: " start_choice
+  read -p "Choose option (1, 2, or 3) [1]: " start_choice
   start_choice=${start_choice:-1}
 
   if [[ "$start_choice" == "1" ]]; then
@@ -648,14 +891,129 @@ while true; do
     break
   elif [[ "$start_choice" == "2" ]]; then
     echo ""
+    echo "Post-setup guide saved to: setup-guide.txt"
+    # Save post-setup guide to file for reference
+    cat > setup-guide.txt << GUIDE_EOF
+AR.IO x402 Bundler - Post-Setup Guide
+Generated: $(date)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+CONFIGURATION SUMMARY:
+
+Network: $NETWORK_TYPE
+Bundler Public URL: $BUNDLER_PUBLIC_URL
+Public Access Gateway: $PUBLIC_ACCESS_GATEWAY
+AR.IO Gateway Integration: $([ -n "$OPTICAL_BRIDGE_URL" ] && echo "Enabled" || echo "Disabled")
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+DEPLOYMENT STEPS:
+
+Step 1: Start the Bundler
+  ./start-bundler.sh
+
+Step 2: Configure Nginx
+  Add this to your nginx configuration:
+
+  # Bundler upload endpoint
+  location /local/upload {
+    proxy_pass http://localhost:3001;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection 'upgrade';
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+
+    # Large file upload support
+    client_max_body_size 10G;
+    proxy_request_buffering off;
+    proxy_read_timeout 300s;
+    proxy_connect_timeout 75s;
+  }
+
+  Then reload nginx:
+    sudo nginx -t && sudo nginx -s reload
+
+$([ -n "$OPTICAL_BRIDGE_URL" ] && cat << GATEWAY_GUIDE
+
+Step 3: Restart AR.IO Gateway
+  cd $([ "$CONFIGURE_GATEWAY" == "true" ] && echo "$ARIO_GATEWAY_DIR" || echo "/path/to/ar-io-node") && docker-compose restart
+
+Step 4: Test the Integration
+  a) Check bundler info endpoint:
+     curl $BUNDLER_PUBLIC_URL/
+
+  b) Check gateway can reach bundler:
+     curl $PUBLIC_ACCESS_GATEWAY/local/upload/
+
+  c) Test upload:
+     echo 'Hello AR.IO' | curl -X POST $BUNDLER_PUBLIC_URL/v1/tx --data-binary @- -H 'Content-Type: application/octet-stream'
+
+$([ "$DEPLOYMENT_TYPE" == "same-server" ] && [ "$SAME_DOCKER_NETWORK" == "true" ] && cat << NETWORK_GUIDE
+
+Step 5: Verify Docker Network
+  Make sure bundler and gateway are in the same Docker network:
+
+  # List networks
+  docker network ls
+
+  # Connect gateway to bundler network (if needed)
+  docker network connect ar-io-x402-bundler_default $GATEWAY_CONTAINER_NAME
+NETWORK_GUIDE
+)
+
+$([ "$DEPLOYMENT_TYPE" == "different-servers" ] && cat << REMOTE_GUIDE
+
+Step 5: Configure Firewall/Networking
+  For remote gateway integration, ensure:
+
+  1. Gateway can reach bundler's optical bridge:
+     $OPTICAL_BRIDGE_URL
+
+  2. Gateway can reach MinIO:
+     $GATEWAY_MINIO_ENDPOINT
+
+  3. Firewall allows connections between servers
+REMOTE_GUIDE
+)
+GATEWAY_GUIDE
+)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ADMIN DASHBOARD:
+  URL: http://localhost:$BULL_BOARD_PORT
+  Username: $ADMIN_USERNAME
+  Password: $ADMIN_PASSWORD
+
+SECURITY NOTES:
+  • Store your admin password securely
+  • Keep your Arweave wallet file safe
+$([ "$NETWORK_TYPE" == "mainnet" ] && echo "  • Keep your CDP API credentials secure")
+  • Use HTTPS in production (configure SSL in nginx)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+GUIDE_EOF
+
+    echo ""
+    cat setup-guide.txt
+    echo ""
+  elif [[ "$start_choice" == "3" ]]; then
+    echo ""
     echo "Setup complete! To start your bundler, run:"
     echo ""
     echo "  ./start-bundler.sh"
     echo ""
+    if [ -n "$BUNDLER_PUBLIC_URL" ]; then
+      echo "Post-setup guide saved to: setup-guide.txt"
+      echo ""
+    fi
     echo "Your configuration is saved in .env"
     echo ""
     exit 0
   else
-    echo -e "${RED}Invalid choice. Please enter 1 or 2.${NC}"
+    echo -e "${RED}Invalid choice. Please enter 1, 2, or 3.${NC}"
   fi
 done
