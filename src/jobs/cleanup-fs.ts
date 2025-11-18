@@ -35,6 +35,11 @@ const DELETE_CONCURRENCY_LIMIT = 8;
 const MAX_ERROR_COUNT = 10;
 const CURSOR_KEY = "fs-cleanup-last-deleted-cursor";
 const DEFAULT_START_DATE = "2025-03-17T00:00:00";
+
+// Configurable retention period (in days)
+const FILESYSTEM_CLEANUP_DAYS = +(process.env.FILESYSTEM_CLEANUP_DAYS || 7);
+// Note: MinIO cleanup not yet implemented - MinIO data persists indefinitely for disaster recovery
+
 let heartbeatTimer: NodeJS.Timeout | null = null;
 type PermanentDataItem = Pick<
   PermanentDataItemDBResult,
@@ -99,7 +104,7 @@ async function cleanupFsHandler({
   teardownComplete: Deferred<void>;
 }) {
   const startTimestamp = new Date();
-  let deletedCount = 0;
+  let filesystemDeletedCount = 0;
   let errorCount = 0;
   let cursor = await getLastCursor();
   const HEARTBEAT_INTERVAL_MS = 15_000;
@@ -112,13 +117,22 @@ async function cleanupFsHandler({
   const fileLimit = pLimit(DELETE_CONCURRENCY_LIMIT);
   let fetchedBatchesCount = 0;
 
+  // Calculate cutoff time for filesystem cleanup
+  const now = Date.now();
+  const filesystemCutoff = new Date(now - FILESYSTEM_CLEANUP_DAYS * 24 * 60 * 60 * 1000);
+
+  logger.info("Cleanup job started", {
+    filesystemCutoff: filesystemCutoff.toISOString(),
+    filesystemRetentionDays: FILESYSTEM_CLEANUP_DAYS,
+  });
+
   function logProgress() {
     const elapsedSecs = Math.max(
       parseFloat(((Date.now() - startTimestamp.getTime()) / 1000).toFixed(3)),
       0.001 // Prevent division by zero
     );
     logger.info("Progress:", {
-      deletedCount,
+      filesystemDeletedCount,
       errorCount,
       cursor,
       bufferedBatchesCount: batchQueue.length,
@@ -126,7 +140,7 @@ async function cleanupFsHandler({
       idsFetchedCount: fetchedBatchesCount * QUERY_BATCH_SIZE,
       elapsedSecs,
       fetchedBatchesPerSec: fetchedBatchesCount / elapsedSecs,
-      deletesPerSec: deletedCount / elapsedSecs,
+      filesystemDeletesPerSec: filesystemDeletedCount / elapsedSecs,
     });
   }
 
@@ -160,7 +174,10 @@ async function cleanupFsHandler({
       return;
     }
     fetching = true;
-    const cutoffTime = new Date(Date.now() - 24 * 60 * 60 * 1000); // 24 hours ago
+
+    // Use filesystem cutoff as the primary cutoff (more aggressive cleanup)
+    const cutoffTime = filesystemCutoff;
+
     while (batchQueue.length < MAX_BATCHES) {
       let batch = await getNextBatch(knexClient, cursor, cutoffTime);
       logger.debug(`Unfiltered batch:`, {
@@ -238,6 +255,7 @@ async function cleanupFsHandler({
         uploadedAt: batch[batch.length - 1].uploaded_date,
         dataItemId: batch[batch.length - 1].data_item_id,
       };
+
       await Promise.all(
         batch.flatMap((row) => {
           const baseDir = path.join(
@@ -254,11 +272,11 @@ async function cleanupFsHandler({
               );
               try {
                 await fs.unlink(filePath);
-                deletedCount++;
+                filesystemDeletedCount++;
                 logger.debug(`Deleted: ${filePath}`);
               } catch (error: any) {
                 if (error.code === "ENOENT") {
-                  logger.warn(`Gone`, { path: filePath });
+                  logger.debug(`File already gone`, { path: filePath });
                 } else {
                   logger.error(`Failed to delete!`, {
                     path: filePath,
@@ -290,9 +308,10 @@ async function cleanupFsHandler({
     if (isOutOfWorkToDo) {
       if (batchQueue.length === 0) {
         logger.info(`✅ Cleanup complete!`, {
-          deletedCount,
+          filesystemDeletedCount,
           errorCount,
           cursor,
+          filesystemRetentionDays: FILESYSTEM_CLEANUP_DAYS,
         });
         teardown();
       } else {

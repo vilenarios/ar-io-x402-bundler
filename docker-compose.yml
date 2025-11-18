@@ -169,6 +169,8 @@ services:
       RAW_DATA_ITEM_JWK_FILE: ${RAW_DATA_ITEM_JWK_FILE}
     volumes:
       - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
+      - bundler-temp:/app/temp
+      - bundler-data:/app/upload-service-data
     networks:
       - ar-io-x402-bundler-network
       - ar-io-network
@@ -252,6 +254,8 @@ services:
       RAW_DATA_ITEM_JWK_FILE: ${RAW_DATA_ITEM_JWK_FILE}
     volumes:
       - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
+      - bundler-temp:/app/temp
+      - bundler-data:/app/upload-service-data
     networks:
       - ar-io-x402-bundler-network
       - ar-io-network
@@ -307,6 +311,8 @@ services:
 volumes:
   postgres-data:
   minio-data:
+  bundler-temp:
+  bundler-data:
 
 networks:
   ar-io-x402-bundler-network:
