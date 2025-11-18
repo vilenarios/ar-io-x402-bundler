@@ -288,7 +288,7 @@ Configured via environment variables or `X402_NETWORKS` JSON:
 - **Ethereum Mainnet** - Supports USDC payments
 - **Polygon Mainnet** - Supports USDC payments
 
-Each network has: `chainId`, `rpcUrl`, `usdcAddress`, `facilitatorUrl`
+Each network has: `chainId`, `rpcUrl`, `usdcAddress`, `facilitatorUrls` (array for multi-facilitator fallback support)
 
 ## Code Navigation
 
