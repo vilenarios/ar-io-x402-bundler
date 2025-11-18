@@ -37,10 +37,10 @@ const router = new Router();
 
 // Initialize stats collector with single database
 const config = {
-  redisHost: process.env.REDIS_CACHE_HOST || 'localhost',
-  redisPort: process.env.REDIS_CACHE_PORT || '6379',
-  redisQueueHost: process.env.REDIS_QUEUE_HOST || 'localhost',
-  redisQueuePort: process.env.REDIS_QUEUE_PORT || '6381',
+  redisHost: process.env.ELASTICACHE_HOST || 'localhost',
+  redisPort: process.env.ELASTICACHE_PORT || '6379',
+  redisQueueHost: process.env.REDIS_HOST || 'localhost',
+  redisQueuePort: process.env.REDIS_PORT_QUEUES || '6381',
   dbHost: process.env.DB_HOST || 'localhost',
   dbPort: process.env.DB_PORT || '5432',
   dbName: process.env.DB_DATABASE || 'bundler_lite',
@@ -56,8 +56,8 @@ serverAdapter.setBasePath("/admin/queues");
 
 // Bundler queues (11 queues)
 const redisConfig = {
-  host: process.env.REDIS_QUEUE_HOST || "localhost",
-  port: parseInt(process.env.REDIS_QUEUE_PORT || "6381"),
+  host: process.env.REDIS_HOST || "localhost",
+  port: parseInt(process.env.REDIS_PORT_QUEUES || "6381"),
   maxRetriesPerRequest: null,
 };
 

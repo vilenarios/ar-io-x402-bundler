@@ -56,8 +56,6 @@ DB_PORT="5432"
 DB_USER="postgres"
 DB_PASSWORD="postgres"
 DB_DATABASE="bundler_lite"
-DB_POOL_MIN="2"
-DB_POOL_MAX="10"
 ELASTICACHE_HOST="redis-cache"
 ELASTICACHE_PORT="6379"
 ELASTICACHE_NO_CLUSTERING="true"
@@ -67,17 +65,18 @@ AWS_REGION="us-east-1"
 AWS_ENDPOINT="http://minio:9000"
 AWS_ACCESS_KEY_ID="minioadmin"
 AWS_SECRET_ACCESS_KEY="minioadmin"
-AWS_S3_BUCKET="bundler-data-items"
-AWS_S3_FORCE_PATH_STYLE="true"
+DATA_ITEM_BUCKET="bundler-data-items"
+S3_FORCE_PATH_STYLE="true"
 ARWEAVE_GATEWAY="https://arweave.net"
+PUBLIC_ACCESS_GATEWAY="https://arweave.nexus"
 ADMIN_USERNAME="admin"
 BULL_BOARD_PORT="3002"
 X402_FRAUD_TOLERANCE_PERCENT="5"
 X402_PRICING_BUFFER_PERCENT="15"
 X402_PAYMENT_TIMEOUT_MS="300000"
 MAX_DATA_ITEM_SIZE="10737418240"
-BUNDLE_SIZE_LIMIT="250000000"
-ENABLE_OPTICAL_POSTING="false"
+MAX_BUNDLE_SIZE="250000000"
+OPTICAL_BRIDGING_ENABLED="true"
 
 #############################
 # Step 1: Network Selection
@@ -103,12 +102,10 @@ while true; do
 
   if [[ "$network_choice" == "1" ]]; then
     NETWORK_TYPE="testnet"
-    X402_NETWORKS='{"base-sepolia":{"enabled":true,"rpcUrl":"https://sepolia.base.org","usdcAddress":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","facilitatorUrl":"https://x402.org/facilitator"}}'
     echo -e "${GREEN}✓${NC} Testnet (Base Sepolia) selected"
     break
   elif [[ "$network_choice" == "2" ]]; then
     NETWORK_TYPE="mainnet"
-    X402_NETWORKS='{"base":{"enabled":true,"rpcUrl":"https://mainnet.base.org","usdcAddress":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","facilitatorUrl":"https://facilitator.base.coinbasecloud.net"}}'
     echo -e "${GREEN}✓${NC} Mainnet (Base) selected"
     break
   else
@@ -263,7 +260,6 @@ echo ""
 read -p "Enable AR.IO gateway integration? (y/N): " enable_ario
 
 if [[ "$enable_ario" =~ ^[Yy]$ ]]; then
-  ENABLE_OPTICAL_POSTING="true"
   read -p "AR.IO Gateway URL [http://localhost:4000]: " ario_url
   OPTICAL_BRIDGE_URL="${ario_url:-http://localhost:4000}/ar-io/admin/queue-data-item"
 
@@ -302,8 +298,6 @@ DB_PORT=${DB_PORT}
 DB_USER=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
 DB_DATABASE=${DB_DATABASE}
-DB_POOL_MIN=${DB_POOL_MIN}
-DB_POOL_MAX=${DB_POOL_MAX}
 
 #############################################
 # Redis Configuration
@@ -324,20 +318,20 @@ AWS_REGION=${AWS_REGION}
 AWS_ENDPOINT=${AWS_ENDPOINT}
 AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-AWS_S3_BUCKET=${AWS_S3_BUCKET}
-AWS_S3_FORCE_PATH_STYLE=${AWS_S3_FORCE_PATH_STYLE}
+DATA_ITEM_BUCKET=${DATA_ITEM_BUCKET}
+S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE}
 
 #############################################
 # Arweave Configuration
 #############################################
 ARWEAVE_GATEWAY=${ARWEAVE_GATEWAY}
+PUBLIC_ACCESS_GATEWAY=${PUBLIC_ACCESS_GATEWAY}
 ARWEAVE_WALLET_FILE=${ARWEAVE_WALLET_FILE}
 
 #############################################
 # x402 Payment Configuration
 #############################################
 X402_PAYMENT_ADDRESS=${X402_PAYMENT_ADDRESS}
-X402_NETWORKS=${X402_NETWORKS}
 
 EOF
 
@@ -361,8 +355,8 @@ X402_PAYMENT_TIMEOUT_MS=${X402_PAYMENT_TIMEOUT_MS}
 # Bundling Configuration
 #############################################
 MAX_DATA_ITEM_SIZE=${MAX_DATA_ITEM_SIZE}
-BUNDLE_SIZE_LIMIT=${BUNDLE_SIZE_LIMIT}
-ENABLE_OPTICAL_POSTING=${ENABLE_OPTICAL_POSTING}
+MAX_BUNDLE_SIZE=${MAX_BUNDLE_SIZE}
+OPTICAL_BRIDGING_ENABLED=${OPTICAL_BRIDGING_ENABLED}
 
 #############################################
 # Optional: Allow-listed Addresses
@@ -448,7 +442,7 @@ if [ -n "$ALLOW_LISTED_ADDRESSES" ]; then
   echo "  • Allow-listed: $ALLOW_LISTED_ADDRESSES"
 fi
 
-if [ "$ENABLE_OPTICAL_POSTING" == "true" ]; then
+if [ "$OPTICAL_BRIDGING_ENABLED" == "true" ]; then
   echo "  • AR.IO Gateway: Enabled"
   echo "    URL: $OPTICAL_BRIDGE_URL"
 fi

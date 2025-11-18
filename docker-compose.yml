@@ -108,8 +108,6 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_DATABASE: bundler_lite
-      DB_POOL_MIN: 2
-      DB_POOL_MAX: 10
 
       # Redis - Cache (Elasticache)
       ELASTICACHE_HOST: redis-cache
@@ -120,13 +118,13 @@ services:
       REDIS_HOST: redis-queue
       REDIS_PORT_QUEUES: 6379
 
-      # MinIO
+      # MinIO (S3-compatible object storage)
       AWS_REGION: us-east-1
       AWS_ENDPOINT: http://minio:9000
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
-      AWS_S3_BUCKET: bundler-data-items
-      AWS_S3_FORCE_PATH_STYLE: "true"
+      DATA_ITEM_BUCKET: bundler-data-items
+      S3_FORCE_PATH_STYLE: "true"
 
       # Arweave
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-https://arweave.net}
@@ -135,9 +133,8 @@ services:
 
       # x402 Configuration
       X402_PAYMENT_ADDRESS: ${X402_PAYMENT_ADDRESS}
-      X402_NETWORKS: ${X402_NETWORKS}
       X402_FRAUD_TOLERANCE_PERCENT: ${X402_FRAUD_TOLERANCE_PERCENT:-5}
-      X402_PRICING_BUFFER_PERCENT: ${X402_PRICING_BUFFER_PERCENT:-5}
+      X402_PRICING_BUFFER_PERCENT: ${X402_PRICING_BUFFER_PERCENT:-15}
       X402_PAYMENT_TIMEOUT_MS: ${X402_PAYMENT_TIMEOUT_MS:-300000}
       CDP_API_KEY_ID: ${CDP_API_KEY_ID}
       CDP_API_KEY_SECRET: ${CDP_API_KEY_SECRET}
@@ -148,8 +145,8 @@ services:
 
       # Bundling
       MAX_DATA_ITEM_SIZE: ${MAX_DATA_ITEM_SIZE:-10737418240}
-      BUNDLE_SIZE_LIMIT: ${BUNDLE_SIZE_LIMIT:-250000000}
-      ENABLE_OPTICAL_POSTING: ${ENABLE_OPTICAL_POSTING:-false}
+      MAX_BUNDLE_SIZE: ${MAX_BUNDLE_SIZE:-250000000}
+      OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-true}
     volumes:
       - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
     restart: unless-stopped
@@ -186,8 +183,6 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_DATABASE: bundler_lite
-      DB_POOL_MIN: 2
-      DB_POOL_MAX: 10
 
       # Redis - Cache (Elasticache)
       ELASTICACHE_HOST: redis-cache
@@ -198,13 +193,13 @@ services:
       REDIS_HOST: redis-queue
       REDIS_PORT_QUEUES: 6379
 
-      # MinIO
+      # MinIO (S3-compatible object storage)
       AWS_REGION: us-east-1
       AWS_ENDPOINT: http://minio:9000
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
-      AWS_S3_BUCKET: bundler-data-items
-      AWS_S3_FORCE_PATH_STYLE: "true"
+      DATA_ITEM_BUCKET: bundler-data-items
+      S3_FORCE_PATH_STYLE: "true"
 
       # Arweave
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-https://arweave.net}
@@ -213,9 +208,8 @@ services:
 
       # x402 Configuration
       X402_PAYMENT_ADDRESS: ${X402_PAYMENT_ADDRESS}
-      X402_NETWORKS: ${X402_NETWORKS}
       X402_FRAUD_TOLERANCE_PERCENT: ${X402_FRAUD_TOLERANCE_PERCENT:-5}
-      X402_PRICING_BUFFER_PERCENT: ${X402_PRICING_BUFFER_PERCENT:-5}
+      X402_PRICING_BUFFER_PERCENT: ${X402_PRICING_BUFFER_PERCENT:-15}
       X402_PAYMENT_TIMEOUT_MS: ${X402_PAYMENT_TIMEOUT_MS:-300000}
       CDP_API_KEY_ID: ${CDP_API_KEY_ID}
       CDP_API_KEY_SECRET: ${CDP_API_KEY_SECRET}
@@ -226,8 +220,8 @@ services:
 
       # Bundling
       MAX_DATA_ITEM_SIZE: ${MAX_DATA_ITEM_SIZE:-10737418240}
-      BUNDLE_SIZE_LIMIT: ${BUNDLE_SIZE_LIMIT:-250000000}
-      ENABLE_OPTICAL_POSTING: ${ENABLE_OPTICAL_POSTING:-false}
+      MAX_BUNDLE_SIZE: ${MAX_BUNDLE_SIZE:-250000000}
+      OPTICAL_BRIDGING_ENABLED: ${OPTICAL_BRIDGING_ENABLED:-true}
     volumes:
       - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
     restart: unless-stopped
