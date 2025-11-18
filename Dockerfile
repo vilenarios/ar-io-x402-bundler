@@ -29,6 +29,10 @@ COPY src ./src
 # Build TypeScript
 RUN yarn build
 
+# Remove TypeScript definition files to prevent knex from loading them
+RUN find ./lib -name "*.d.ts" -delete && \
+    find ./lib -name "*.d.ts.map" -delete
+
 # Generate a default admin password if not provided
 RUN echo "Default admin password: $(openssl rand -hex 32)" > /tmp/admin-password.txt
 

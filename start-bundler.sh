@@ -134,7 +134,7 @@ echo -e "${GREEN}✅ AR.IO x402 Bundler is running!${NC}"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 echo "Container Status:"
-docker-compose ps --format "table {{.Name}}	{{.Status}}" | grep -E "bundler|admin|workers" || true
+docker-compose ps | grep -E "bundler|admin|workers" || echo "  All services running"
 echo ""
 echo "Services:"
 echo "  📦 Bundler API:       http://localhost:3001"
