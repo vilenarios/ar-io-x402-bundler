@@ -218,6 +218,47 @@ else
   CDP_API_KEY_SECRET=""
 fi
 
+# Facilitator Configuration
+echo ""
+echo "x402 Facilitator Configuration:"
+echo "  Facilitators handle payment settlement on-chain."
+echo "  Multiple facilitators provide automatic fallback if one fails."
+echo ""
+
+if [ "$NETWORK_TYPE" == "mainnet" ]; then
+  echo "  Default facilitators for Base Mainnet:"
+  echo "    1. Coinbase (https://api.cdp.coinbase.com/platform/v2/x402)"
+  echo "    2. Mogami (https://facilitator.mogami.tech) - fallback"
+else
+  echo "  Default facilitator for Base Sepolia:"
+  echo "    • Mogami (https://facilitator.mogami.tech)"
+fi
+
+echo ""
+read -p "Customize facilitators? (y/N): " customize_facilitators
+customize_facilitators=${customize_facilitators:-N}
+
+if [[ "$customize_facilitators" =~ ^[Yy]$ ]]; then
+  echo ""
+  echo "Enter comma-separated list of facilitator URLs."
+  echo "Example: https://facilitator1.com,https://facilitator2.com"
+  echo ""
+
+  if [ "$NETWORK_TYPE" == "mainnet" ]; then
+    read -p "Base Mainnet facilitators: " X402_FACILITATORS_BASE
+  else
+    read -p "Base Sepolia facilitators: " X402_FACILITATORS_BASE_TESTNET
+  fi
+
+  echo -e "${GREEN}✓${NC} Custom facilitators configured"
+  echo ""
+else
+  X402_FACILITATORS_BASE=""
+  X402_FACILITATORS_BASE_TESTNET=""
+  echo -e "${GREEN}✓${NC} Using default facilitators"
+  echo ""
+fi
+
 #############################
 # Step 4: Admin Dashboard
 #############################
@@ -585,7 +626,26 @@ CDP_API_KEY_SECRET=${CDP_API_KEY_SECRET}
 EOF
 fi
 
+# Add facilitator configuration
 cat >> .env << EOF
+# x402 Facilitator Configuration (Multi-Facilitator Fallback)
+# Provide comma-separated list of facilitators (tries in order until one succeeds)
+EOF
+
+if [ -n "$X402_FACILITATORS_BASE" ]; then
+  echo "X402_FACILITATORS_BASE=${X402_FACILITATORS_BASE}" >> .env
+else
+  echo "# X402_FACILITATORS_BASE=" >> .env
+fi
+
+if [ -n "$X402_FACILITATORS_BASE_TESTNET" ]; then
+  echo "X402_FACILITATORS_BASE_TESTNET=${X402_FACILITATORS_BASE_TESTNET}" >> .env
+else
+  echo "# X402_FACILITATORS_BASE_TESTNET=" >> .env
+fi
+
+cat >> .env << EOF
+
 # x402 Advanced Settings
 X402_FRAUD_TOLERANCE_PERCENT=${X402_FRAUD_TOLERANCE_PERCENT}
 X402_PRICING_BUFFER_PERCENT=${X402_PRICING_BUFFER_PERCENT}
@@ -782,6 +842,19 @@ if [ "$FREE_UPLOAD_LIMIT" == "0" ]; then
   echo "  • Free Uploads: Disabled (all uploads require payment)"
 else
   echo "  • Free Upload Limit: $FREE_UPLOAD_LIMIT bytes"
+fi
+
+# Show facilitators
+if [ -n "$X402_FACILITATORS_BASE" ]; then
+  echo "  • Facilitators (Base): Custom ($X402_FACILITATORS_BASE)"
+elif [ "$NETWORK_TYPE" == "mainnet" ]; then
+  echo "  • Facilitators (Base): Coinbase → Mogami (default)"
+fi
+
+if [ -n "$X402_FACILITATORS_BASE_TESTNET" ]; then
+  echo "  • Facilitators (Sepolia): Custom ($X402_FACILITATORS_BASE_TESTNET)"
+elif [ "$NETWORK_TYPE" == "testnet" ]; then
+  echo "  • Facilitators (Sepolia): Mogami (default)"
 fi
 echo ""
 

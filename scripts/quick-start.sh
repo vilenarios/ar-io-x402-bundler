@@ -201,14 +201,17 @@ ADMIN_PASSWORD=$(openssl rand -hex 32)
 print_success "Generated secure admin password"
 
 # Determine network configuration
+# NOTE: X402_NETWORKS is for reference only - actual config uses individual env vars
 if [ "$NETWORK" = "mainnet" ]; then
     print_info "Configuring for MAINNET"
-    X402_NETWORKS='{"base":{"enabled":true,"rpcUrl":"https://mainnet.base.org","usdcAddress":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","facilitatorUrl":"https://facilitator.base.coinbasecloud.net"}}'
+    # Set facilitator URLs (comma-separated for multi-facilitator fallback)
+    X402_FACILITATORS="https://api.cdp.coinbase.com/platform/v2/x402,https://facilitator.mogami.tech"
     print_warning "MAINNET requires Coinbase CDP credentials (CDP_API_KEY_ID, CDP_API_KEY_SECRET)"
     print_warning "Get credentials from: https://portal.cdp.coinbase.com/"
 elif [ "$NETWORK" = "testnet" ]; then
     print_info "Configuring for TESTNET (Base Sepolia)"
-    X402_NETWORKS='{"base-sepolia":{"enabled":true,"rpcUrl":"https://sepolia.base.org","usdcAddress":"0x036CbD53842c5426634e7929541eC2318f3dCF7e","facilitatorUrl":"https://x402.org/facilitator"}}'
+    # Testnet uses Mogami facilitator (no CDP required)
+    X402_FACILITATORS="https://facilitator.mogami.tech"
     print_success "Testnet mode - no CDP credentials required"
 else
     print_error "Invalid network: $NETWORK (must be 'testnet' or 'mainnet')"
@@ -270,7 +273,20 @@ ARWEAVE_WALLET_FILE=$WALLET_ABSOLUTE
 # x402 Payment Configuration
 #############################################
 X402_PAYMENT_ADDRESS=$X402_ADDRESS
-X402_NETWORKS=$X402_NETWORKS
+
+# x402 Facilitator Configuration (Multi-Facilitator Fallback)
+# Comma-separated list tries facilitators in order until one succeeds
+EOF
+
+if [ "$NETWORK" = "mainnet" ]; then
+  echo "X402_FACILITATORS_BASE=$X402_FACILITATORS" >> .env
+else
+  echo "X402_FACILITATORS_BASE_TESTNET=$X402_FACILITATORS" >> .env
+fi
+
+cat >> .env << 'EOF'
+
+# x402 Advanced Settings
 X402_FRAUD_TOLERANCE_PERCENT=5
 X402_PRICING_BUFFER_PERCENT=5
 X402_PAYMENT_TIMEOUT_MS=300000

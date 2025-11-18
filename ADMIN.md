@@ -264,17 +264,47 @@ X402_PAYMENT_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb
 CDP_API_KEY_ID=your-cdp-key-id
 CDP_API_KEY_SECRET=your-cdp-secret
 
+# Multi-Facilitator Configuration (comma-separated lists)
+# Base mainnet facilitators (default: Coinbase → Mogami fallback)
+X402_FACILITATORS_BASE=https://api.cdp.coinbase.com/platform/v2/x402,https://facilitator.mogami.tech
+
+# Base Sepolia testnet (default: Mogami only)
+X402_FACILITATORS_BASE_TESTNET=https://facilitator.mogami.tech
+
+# Optional: Ethereum/Polygon facilitators (no defaults)
+# X402_FACILITATORS_ETH=https://facilitator1.com,https://facilitator2.com
+# X402_FACILITATORS_POLYGON=https://facilitator1.com,https://facilitator2.com
+
 # Advanced Settings
 X402_FRAUD_TOLERANCE_PERCENT=5      # ±5% byte count tolerance
 X402_PRICING_BUFFER_PERCENT=15      # 15% price buffer
 X402_PAYMENT_TIMEOUT_MS=300000      # 5 minutes
 ```
 
+**Multi-Facilitator Fallback**:
+The bundler supports automatic fallback between multiple facilitators. Facilitators are tried sequentially in the order specified until one succeeds.
+
 **Networks Supported**:
-- **Base Sepolia (testnet)** - Default, no CDP credentials needed
-- **Base Mainnet** - Requires CDP credentials
-- **Ethereum Mainnet** - Requires CDP credentials
-- **Polygon Mainnet** - Requires CDP credentials
+- **Base Sepolia (testnet)** - Default: Mogami (no CDP needed)
+- **Base Mainnet** - Default: Coinbase (primary) → Mogami (fallback)
+- **Ethereum Mainnet** - No default (must configure if enabled)
+- **Polygon Mainnet** - No default (must configure if enabled)
+
+**Facilitator Configuration Examples**:
+
+```bash
+# Use defaults (leave commented or omit)
+# X402_FACILITATORS_BASE=
+
+# Custom facilitator list (tries in order)
+X402_FACILITATORS_BASE=https://my-facilitator.com,https://backup-facilitator.com,https://third-facilitator.com
+
+# Single facilitator only
+X402_FACILITATORS_BASE=https://facilitator.mogami.tech
+
+# Override mainnet defaults
+X402_FACILITATORS_BASE=https://api.cdp.coinbase.com/platform/v2/x402,https://facilitator.mogami.tech
+```
 
 #### Database Configuration
 
