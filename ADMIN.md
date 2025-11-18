@@ -19,6 +19,13 @@ Complete guide for deploying, operating, monitoring, and troubleshooting the AR.
 - [Operations](#operations)
 - [Troubleshooting](#troubleshooting)
 - [Maintenance](#maintenance)
+- [Storage Management](#storage-management)
+  - [Understanding Storage Tiers](#understanding-storage-tiers)
+  - [Cleanup Configuration](#cleanup-configuration)
+  - [Monitoring Storage Usage](#monitoring-storage-usage)
+  - [Manual Cleanup Operations](#manual-cleanup-operations)
+  - [Troubleshooting Storage Issues](#troubleshooting-storage-issues)
+  - [Storage Best Practices](#storage-best-practices)
 - [Security](#security)
 
 ---
@@ -1469,6 +1476,506 @@ docker-compose exec postgres pg_dump -U postgres bundler_lite > backup-before-up
 # 5. Verify database
 docker-compose exec postgres psql -U postgres -d bundler_lite -c "SELECT version();"
 ```
+
+---
+
+## Storage Management
+
+### Understanding Storage Tiers
+
+The bundler uses a **tiered storage architecture** to balance performance, cost, and data safety:
+
+```
+Upload → [Redis Cache + Filesystem + MinIO] → Bundling → Arweave
+              ↓                ↓                            ↓
+         (ephemeral)      (7 days)      (90 days)    (permanent)
+```
+
+#### Storage Tier Breakdown
+
+| Tier | Purpose | Retention | Cleanup |
+|------|---------|-----------|---------|
+| **Redis Cache** | Hot cache for active uploads | Ephemeral (memory only) | Automatic eviction |
+| **Filesystem** | Hot cache for bundling performance | 7 days (default) | Automatic cleanup job |
+| **MinIO (S3)** | Cold storage for disaster recovery | 90 days (default) | Automatic cleanup job |
+| **Arweave** | Permanent decentralized storage | Forever | None (immutable) |
+
+#### Why This Architecture?
+
+1. **Filesystem (7 days)**:
+   - Fast bundling: Workers read from local disk instead of network
+   - Performance: Assembling large bundles is disk I/O intensive
+   - Temporary: After bundling, data is in MinIO + Arweave
+
+2. **MinIO (90 days)**:
+   - Disaster recovery: If Arweave posting fails, re-bundle from MinIO
+   - Re-bundling: Can rebuild bundles without re-uploading
+   - Network-accessible: Multiple workers can access same data
+   - After 90 days: Data is confirmed on Arweave, MinIO copy not needed
+
+3. **Arweave (permanent)**:
+   - Immutable permanent storage
+   - Decentralized availability
+   - Final source of truth
+
+### Cleanup Configuration
+
+#### Environment Variables
+
+```bash
+# Filesystem cleanup (hot cache)
+FILESYSTEM_CLEANUP_DAYS=7       # Keep for 7 days after upload
+
+# MinIO cleanup (cold storage)
+MINIO_CLEANUP_DAYS=90           # Keep for 90 days after upload
+
+# Cleanup schedule (cron format)
+CLEANUP_CRON=0 2 * * *          # Daily at 2 AM UTC
+```
+
+#### Cron Schedule Examples
+
+```bash
+# Every 6 hours
+CLEANUP_CRON=0 */6 * * *
+
+# Weekly on Sunday at 3 AM
+CLEANUP_CRON=0 3 * * 0
+
+# Monthly on the 1st at 1 AM
+CLEANUP_CRON=0 1 1 * *
+
+# Twice daily (2 AM and 2 PM)
+CLEANUP_CRON=0 2,14 * * *
+```
+
+#### How Cleanup Works
+
+The cleanup system uses BullMQ's repeatable jobs:
+
+1. **Automatic Scheduling**: When workers start, cleanup job is scheduled with configured cron pattern
+2. **Batch Processing**: Processes data items in batches of 500
+3. **Tiered Deletion**:
+   - Items older than `FILESYSTEM_CLEANUP_DAYS` → delete from filesystem
+   - Items older than `MINIO_CLEANUP_DAYS` → delete from MinIO
+   - Items on Arweave → never deleted (permanent)
+4. **Error Handling**: Gracefully handles missing files (already cleaned or deleted)
+5. **Progress Tracking**: Uses database cursor to resume from last position
+
+### Monitoring Storage Usage
+
+#### Check Disk Space
+
+```bash
+# Overall disk usage
+df -h
+
+# Docker volumes
+docker system df -v
+
+# Specific directories
+du -sh /path/to/bundler/temp
+du -sh /path/to/bundler/upload-service-data
+
+# Inside Docker
+docker-compose exec bundler df -h
+docker-compose exec bundler du -sh /app/temp /app/upload-service-data
+```
+
+#### Check MinIO Storage
+
+**Via MinIO Console**: http://localhost:9001
+
+**Via CLI**:
+
+```bash
+# List buckets and sizes
+docker-compose exec minio mc du local/bundler-data-items
+
+# Count objects in bucket
+docker-compose exec minio mc ls --recursive local/bundler-data-items | wc -l
+```
+
+#### Check Database Storage
+
+```sql
+-- Total data items by status
+SELECT
+  'filesystem' as tier,
+  COUNT(*) as count,
+  SUM(byte_count) as total_bytes,
+  pg_size_pretty(SUM(byte_count)::bigint) as total_size
+FROM permanent_data_item
+WHERE uploaded_date > NOW() - INTERVAL '7 days';
+
+-- MinIO data (uploaded within 90 days)
+SELECT
+  'minio' as tier,
+  COUNT(*) as count,
+  SUM(byte_count) as total_bytes,
+  pg_size_pretty(SUM(byte_count)::bigint) as total_size
+FROM permanent_data_item
+WHERE uploaded_date > NOW() - INTERVAL '90 days';
+
+-- Arweave (all permanent data)
+SELECT
+  'arweave' as tier,
+  COUNT(*) as count,
+  SUM(byte_count) as total_bytes,
+  pg_size_pretty(SUM(byte_count)::bigint) as total_size
+FROM permanent_data_item;
+```
+
+### Manual Cleanup Operations
+
+#### Trigger Cleanup Manually
+
+```bash
+# Using trigger script
+node scripts/trigger-cleanup.js
+
+# Docker
+docker-compose exec bundler node scripts/trigger-cleanup.js
+
+# Check cleanup job in Bull Board
+# http://localhost:3002/admin/queues → cleanup-fs queue
+```
+
+#### Monitor Cleanup Progress
+
+```bash
+# Watch cleanup job logs
+docker-compose logs -f workers | grep cleanup
+
+# PM2
+pm2 logs upload-workers | grep cleanup
+
+# Expected log output:
+# "Cleanup job started"
+# "Progress: filesystemDeletedCount=152, minioDeletedCount=43"
+# "✅ Cleanup complete!"
+```
+
+#### Clean Specific Data Manually
+
+**Emergency cleanup (if automation fails)**:
+
+```bash
+# Clean old filesystem files (7+ days old)
+find /path/to/bundler/temp -type f -mtime +7 -delete
+find /path/to/bundler/upload-service-data -type f -mtime +7 -delete
+
+# Docker
+docker-compose exec bundler find /app/temp -type f -mtime +7 -delete
+docker-compose exec bundler find /app/upload-service-data -type f -mtime +7 -delete
+```
+
+**⚠️ Warning**: Manual deletion bypasses tracking. Use only in emergencies.
+
+### Cleanup Job Monitoring
+
+#### Check Cleanup Schedule
+
+```bash
+# View cleanup job in Bull Board
+# http://localhost:3002/admin/queues → cleanup-fs
+
+# Check next scheduled run
+# Bull Board shows "Next job at: 2025-01-19 02:00:00 UTC"
+```
+
+#### Cleanup Job Metrics
+
+Check Prometheus metrics at http://localhost:3001/bundler_metrics:
+
+```bash
+# Cleanup job executions
+cleanup_job_total 47
+
+# Cleanup errors
+cleanup_job_errors_total 0
+
+# Items cleaned by tier
+cleanup_filesystem_deleted_total 15234
+cleanup_minio_deleted_total 4521
+```
+
+#### Review Cleanup History
+
+```sql
+-- Check cleanup cursor (last cleaned item)
+SELECT * FROM config WHERE key = 'fs-cleanup-last-deleted-cursor';
+
+-- Example output:
+-- {"uploadedAt": "2025-01-12T14:23:45", "dataItemId": "abc123..."}
+```
+
+### Troubleshooting Storage Issues
+
+#### Problem: Disk space running out
+
+**Symptoms**:
+
+```
+Error: ENOSPC: no space left on device
+docker: Error response from daemon: no space left on device
+```
+
+**Solutions**:
+
+1. **Check cleanup is running**:
+
+```bash
+# Verify cleanup job scheduled
+# http://localhost:3002/admin/queues → cleanup-fs
+
+# Check recent cleanup jobs
+docker-compose logs workers | grep cleanup | tail -20
+```
+
+2. **Trigger immediate cleanup**:
+
+```bash
+# Run cleanup now (don't wait for schedule)
+node scripts/trigger-cleanup.js
+
+# Watch progress
+docker-compose logs -f workers | grep cleanup
+```
+
+3. **Reduce retention periods temporarily**:
+
+```bash
+# Edit .env
+FILESYSTEM_CLEANUP_DAYS=3  # Reduce from 7 to 3 days
+MINIO_CLEANUP_DAYS=30      # Reduce from 90 to 30 days
+
+# Restart workers to pick up new config
+docker-compose restart workers
+
+# Trigger cleanup
+node scripts/trigger-cleanup.js
+```
+
+4. **Clean Docker resources**:
+
+```bash
+# Remove unused Docker images and volumes
+docker system prune -a --volumes
+
+# Check space saved
+df -h
+```
+
+#### Problem: Cleanup job failing
+
+**Symptoms**:
+
+```
+Bull Board shows cleanup-fs jobs in "Failed" status
+Logs show "Error during cleanup processing"
+```
+
+**Solutions**:
+
+1. **Check error details**:
+
+Go to Bull Board → cleanup-fs queue → Failed Jobs → View error stack trace
+
+2. **Common failures**:
+
+**MinIO connection errors**:
+
+```bash
+# Verify MinIO is running
+docker-compose ps minio
+curl http://localhost:9000/minio/health/live
+
+# Restart MinIO
+docker-compose restart minio
+```
+
+**Database connection errors**:
+
+```bash
+# Check PostgreSQL
+docker-compose exec postgres psql -U postgres -d bundler_lite -c "SELECT 1;"
+
+# Restart if needed
+docker-compose restart postgres
+```
+
+**Permission errors**:
+
+```bash
+# Check file permissions
+docker-compose exec bundler ls -la /app/temp
+docker-compose exec bundler ls -la /app/upload-service-data
+
+# Fix if needed (run as root)
+docker-compose exec --user root bundler chown -R node:node /app/temp /app/upload-service-data
+```
+
+3. **Retry failed jobs**:
+
+In Bull Board, click "Retry" on failed cleanup jobs
+
+4. **Reset cleanup cursor** (last resort):
+
+```sql
+-- Reset to start from beginning
+DELETE FROM config WHERE key = 'fs-cleanup-last-deleted-cursor';
+
+-- Trigger cleanup again
+-- node scripts/trigger-cleanup.js
+```
+
+#### Problem: MinIO storage not being cleaned
+
+**Symptoms**:
+
+```
+MinIO bucket size keeps growing
+Filesystem is cleaned but MinIO is not
+```
+
+**Solutions**:
+
+1. **Verify MINIO_CLEANUP_DAYS is set**:
+
+```bash
+grep MINIO_CLEANUP_DAYS .env
+
+# Should be: MINIO_CLEANUP_DAYS=90 (or your preferred retention)
+```
+
+2. **Check cleanup logs for MinIO deletions**:
+
+```bash
+docker-compose logs workers | grep "Deleted MinIO"
+
+# Expected output:
+# "Deleted MinIO: raw-data-item/abc123..."
+# "minioDeletedCount: 45"
+```
+
+3. **Verify data items are old enough**:
+
+```sql
+-- Count items eligible for MinIO cleanup (90+ days old)
+SELECT COUNT(*)
+FROM permanent_data_item
+WHERE uploaded_date < NOW() - INTERVAL '90 days';
+```
+
+If count is 0, no items are old enough yet. Wait or reduce retention period.
+
+4. **Test MinIO deletion manually**:
+
+```bash
+# List objects in MinIO
+docker-compose exec minio mc ls local/bundler-data-items/raw-data-item/ | head
+
+# Try deleting one object manually
+docker-compose exec minio mc rm local/bundler-data-items/raw-data-item/test123
+
+# If this fails, check MinIO credentials in .env
+```
+
+#### Problem: Cleanup running too frequently/infrequently
+
+**Solution**: Adjust cleanup schedule
+
+```bash
+# Edit .env
+CLEANUP_CRON=0 */12 * * *  # Every 12 hours instead of daily
+
+# Restart workers
+docker-compose restart workers
+
+# Verify new schedule in Bull Board
+# http://localhost:3002/admin/queues → cleanup-fs → Repeatable Jobs
+```
+
+### Storage Best Practices
+
+#### 1. Monitor Disk Usage
+
+Set up alerts for disk usage:
+
+```bash
+# Cron job to check disk usage daily
+0 8 * * * df -h | grep -E "9[0-9]%|100%" && echo "ALERT: Disk usage high" | mail -s "Bundler Disk Alert" admin@example.com
+```
+
+#### 2. Regular Cleanup Verification
+
+Weekly task: Check cleanup is working
+
+```bash
+# 1. Check Bull Board for successful cleanup jobs
+# http://localhost:3002/admin/queues → cleanup-fs → Completed
+
+# 2. Verify old files are being deleted
+docker-compose exec bundler find /app/temp -type f -mtime +7 | head
+# Should return 0 or very few files
+
+# 3. Check MinIO object count trend
+docker-compose exec minio mc ls --recursive local/bundler-data-items | wc -l
+```
+
+#### 3. Backup Before Major Changes
+
+Before changing retention policies:
+
+```bash
+# 1. Backup database
+docker-compose exec postgres pg_dump -U postgres bundler_lite > backup-before-retention-change.sql
+
+# 2. Note current storage sizes
+docker system df -v > storage-snapshot.txt
+docker-compose exec minio mc du local/bundler-data-items > minio-snapshot.txt
+
+# 3. Make changes gradually
+# Start with small reduction, verify cleanup works, then reduce further
+```
+
+#### 4. Test Disaster Recovery
+
+Quarterly: Verify you can re-bundle from MinIO
+
+```bash
+# 1. Pick a recent bundle from database
+# 2. Verify data items still in MinIO
+# 3. Simulate re-bundling process
+# 4. Confirm bundle can be reconstructed
+```
+
+#### 5. Right-Size Retention Periods
+
+**Conservative** (safer, more storage):
+```bash
+FILESYSTEM_CLEANUP_DAYS=14
+MINIO_CLEANUP_DAYS=180
+```
+
+**Aggressive** (less storage, higher risk):
+```bash
+FILESYSTEM_CLEANUP_DAYS=3
+MINIO_CLEANUP_DAYS=30
+```
+
+**Recommended** (balanced):
+```bash
+FILESYSTEM_CLEANUP_DAYS=7   # 1 week filesystem cache
+MINIO_CLEANUP_DAYS=90       # 3 months disaster recovery
+```
+
+Choose based on:
+- Available disk space
+- Bundle posting frequency
+- Re-bundling likelihood
+- Disaster recovery requirements
 
 ---
 
