@@ -171,6 +171,10 @@ export async function startAllWorkers(): Promise<void> {
   logger.info(`Started ${workers.length} BullMQ workers`);
   logger.warn("Note: Some workers (prepare, post, seed, optical-post, unbundle-bdi, put-offsets, finalize-upload) are not yet implemented");
   logger.warn("Jobs for these queues will remain pending until workers are added");
+
+  // Schedule recurring cleanup job
+  const { scheduleCleanupJob } = await import("./scheduleCleanup");
+  await scheduleCleanupJob();
 }
 
 /**
