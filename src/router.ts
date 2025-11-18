@@ -52,6 +52,7 @@ router.post(serveRoutesAndV1(["/tx", "/tx/:token"]), dataItemRoute);
 router.get("/v1/x402/price/:signatureType/:address", x402PriceRoute);
 router.post("/v1/x402/payment/:signatureType/:address", x402PaymentRoute);
 router.post("/v1/x402/finalize", x402FinalizeRoute);
+router.post("/x402/data-item/signed", dataItemRoute);
 
 /**
  * START TEMPORARY PATCH TO SUPPORT up.arweave.net
