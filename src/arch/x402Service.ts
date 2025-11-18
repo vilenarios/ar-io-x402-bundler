@@ -452,19 +452,9 @@ export class X402Service {
       paymentRequirements: requirements,
     };
 
-    // Add Coinbase auth headers if using Coinbase facilitator
     const headers: Record<string, string> = { "Content-Type": "application/json" };
 
-    if (isCoinbaseFacilitator) {
-      try {
-        const authHeaders = await coinbaseFacilitatorConfig.createAuthHeaders();
-        Object.assign(headers, authHeaders.settle || {});
-      } catch (error) {
-        logger.warn("Failed to create Coinbase auth headers, trying without", { error });
-      }
-    }
-
-    // Make settlement request with 60 second timeout (longer than SDK default)
+    // Make settlement request with 60 second timeout
     const response = await axios.post(
       `${facilitatorUrl}/settle`,
       requestPayload,
