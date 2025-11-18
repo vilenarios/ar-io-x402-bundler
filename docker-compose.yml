@@ -130,6 +130,7 @@ services:
 
       # Arweave
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-https://arweave.net}
+      PUBLIC_ACCESS_GATEWAY: ${PUBLIC_ACCESS_GATEWAY:-https://arweave.nexus}
       TURBO_JWK_FILE: ${ARWEAVE_WALLET_FILE}
 
       # x402 Configuration
@@ -207,6 +208,7 @@ services:
 
       # Arweave
       ARWEAVE_GATEWAY: ${ARWEAVE_GATEWAY:-https://arweave.net}
+      PUBLIC_ACCESS_GATEWAY: ${PUBLIC_ACCESS_GATEWAY:-https://arweave.nexus}
       TURBO_JWK_FILE: ${ARWEAVE_WALLET_FILE}
 
       # x402 Configuration
