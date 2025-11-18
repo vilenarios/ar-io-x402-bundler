@@ -487,6 +487,32 @@ read -p "Allow-listed addresses (comma-separated, or Enter to skip): " ALLOW_LIS
 
 echo ""
 
+# Cleanup Configuration
+echo "Data Cleanup Configuration:"
+echo "  The bundler automatically cleans up old data to save disk space."
+echo "  Storage tiers: Filesystem (hot cache) → MinIO (cold storage) → Arweave (permanent)"
+echo ""
+
+echo "Filesystem cleanup (hot cache for bundling performance):"
+read -p "  Keep filesystem backups for how many days? [7]: " fs_cleanup_days
+FILESYSTEM_CLEANUP_DAYS=${fs_cleanup_days:-7}
+echo -e "${GREEN}✓${NC} Filesystem retention: $FILESYSTEM_CLEANUP_DAYS days"
+
+echo ""
+echo "MinIO cleanup (cold storage for disaster recovery):"
+read -p "  Keep MinIO data for how many days? [90]: " minio_cleanup_days
+MINIO_CLEANUP_DAYS=${minio_cleanup_days:-90}
+echo -e "${GREEN}✓${NC} MinIO retention: $MINIO_CLEANUP_DAYS days"
+
+echo ""
+echo "Cleanup schedule (cron format):"
+echo "  Examples: '0 2 * * *' (daily 2 AM), '0 */6 * * *' (every 6 hours)"
+read -p "  Cleanup cron schedule [0 2 * * *]: " cleanup_cron
+CLEANUP_CRON=${cleanup_cron:-"0 2 * * *"}
+echo -e "${GREEN}✓${NC} Cleanup schedule: $CLEANUP_CRON"
+
+echo ""
+
 #############################
 # Create .env file
 #############################
@@ -580,6 +606,27 @@ MAX_DATA_ITEM_SIZE=${MAX_DATA_ITEM_SIZE}
 MAX_BUNDLE_SIZE=${MAX_BUNDLE_SIZE}
 APP_NAME=AR.IO Bundler
 OPTICAL_BRIDGING_ENABLED=${OPTICAL_BRIDGING_ENABLED}
+
+#############################################
+# Data Cleanup Configuration
+#############################################
+# How many days to keep filesystem backups before cleanup
+# Filesystem backups are used as hot cache during bundling
+# After bundling, items are in MinIO + Arweave, so filesystem can be cleaned
+FILESYSTEM_CLEANUP_DAYS=7
+
+# How many days to keep MinIO data before cleanup
+# MinIO is cold storage for disaster recovery and re-bundling
+# After this period, items are only in Arweave (permanent storage)
+MINIO_CLEANUP_DAYS=90
+
+# Cleanup job schedule (cron format)
+# Default: "0 2 * * *" (daily at 2 AM UTC)
+# Examples:
+#   "0 */6 * * *"  - Every 6 hours
+#   "0 3 * * 0"    - Weekly on Sunday at 3 AM
+#   "0 1 1 * *"    - Monthly on the 1st at 1 AM
+CLEANUP_CRON=0 2 * * *
 
 #############################################
 # Optional: Allow-listed Addresses
@@ -742,6 +789,12 @@ echo "Admin Dashboard:"
 echo "  • URL: http://localhost:$BULL_BOARD_PORT"
 echo "  • Username: $ADMIN_USERNAME"
 echo "  • Password: $ADMIN_PASSWORD"
+echo ""
+
+echo "Data Cleanup:"
+echo "  • Filesystem retention: $FILESYSTEM_CLEANUP_DAYS days"
+echo "  • MinIO retention: $MINIO_CLEANUP_DAYS days"
+echo "  • Schedule: $CLEANUP_CRON (runs automatically)"
 echo ""
 
 if [ -n "$BUNDLER_PUBLIC_URL" ]; then
