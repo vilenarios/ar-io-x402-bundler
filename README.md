@@ -371,7 +371,7 @@ X402_BASE_TESTNET_ENABLED=true
 X402_BASE_ENABLED=false  # Set to true for mainnet
 X402_FACILITATOR_URL_BASE_TESTNET=https://x402.org/facilitator
 X402_FRAUD_TOLERANCE_PERCENT=5
-X402_PRICING_BUFFER_PERCENT=15
+X402_FEE_PERCENT=30
 
 # Coinbase CDP (Required for mainnet, optional for testnet)
 CDP_API_KEY_ID=your-cdp-key-id

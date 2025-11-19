@@ -20,7 +20,7 @@ import {
   x402Networks,
   x402PaymentAddress,
   x402PaymentTimeoutMs,
-  x402PricingBufferPercent,
+  x402FeePercent,
   cdpClientKey,
   multipartDepositUSDC,
 } from "../../constants";
@@ -122,14 +122,14 @@ export async function x402PriceRoute(ctx: KoaContext, next: Next) {
           { byteCount: byteCount as ByteCount, signatureType },
         ]);
 
-      // Add pricing buffer for volatility and fees
-      const winstonWithBuffer = Math.ceil(
-        winstonPrice * (1 + x402PricingBufferPercent / 100)
+      // Add bundler fee (profit margin on top of Arweave costs)
+      const winstonWithFee = Math.ceil(
+        winstonPrice * (1 + x402FeePercent / 100)
       );
 
       // Convert Winston to USDC (using singleton for caching)
       usdcAmount = await x402PricingOracle.getUSDCForWinston(
-        W(winstonWithBuffer.toString())
+        W(winstonWithFee.toString())
       );
 
       // Apply minimum payment threshold (Coinbase facilitator minimum: 0.001 USDC = 1,000 atomic units)

@@ -497,9 +497,9 @@ export const x402PaymentTimeoutMs = +(
   process.env.X402_PAYMENT_TIMEOUT_MS ?? 300000
 );
 
-// x402 pricing buffer to account for price volatility (15% default)
-export const x402PricingBufferPercent = +(
-  process.env.X402_PRICING_BUFFER_PERCENT ?? 15
+// x402 bundler fee percentage (30% default - this is the bundler's profit margin)
+export const x402FeePercent = +(
+  process.env.X402_FEE_PERCENT ?? 30
 );
 
 // x402 fraud detection tolerance (5% default)

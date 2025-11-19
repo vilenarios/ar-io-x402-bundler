@@ -20,7 +20,7 @@ import {
   defaultX402PaymentMode,
   x402PaymentModes,
   x402PaymentTimeoutMs,
-  x402PricingBufferPercent,
+  x402FeePercent,
 } from "../../constants";
 import { UserAddressType, X402PaymentMode } from "../../types/dbTypes";
 import { X402PaymentError } from "../../utils/errors";
@@ -154,9 +154,9 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
           { byteCount, signatureType },
         ]);
 
-      // Add pricing buffer
+      // Add bundler fee (profit margin on top of Arweave costs)
       winstonCost = W(
-        Math.ceil(winstonPrice * (1 + x402PricingBufferPercent / 100)).toString()
+        Math.ceil(winstonPrice * (1 + x402FeePercent / 100)).toString()
       );
 
       // Convert Winston to USDC with CURRENT AR price (using singleton for caching)

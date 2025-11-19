@@ -34,6 +34,8 @@ import { swaggerDocs, swaggerDocsJSON } from "./routes/swagger";
 import { x402FinalizeRoute } from "./routes/x402/x402Finalize";
 import { x402PaymentRoute } from "./routes/x402/x402Payment";
 import { x402PriceRoute } from "./routes/x402/x402Price";
+import { x402DataItemPriceRoute } from "./routes/x402/x402DataItemPrice";
+import { x402RawDataPriceRoute } from "./routes/x402/x402RawDataPrice";
 import { KoaContext } from "./server";
 
 const metricsRegistry = MetricRegistry.getInstance().getRegistry();
@@ -48,11 +50,18 @@ const serveRoutesAndV1 = (path: string[]) =>
 // Raw data post routes
 router.post(serveRoutesAndV1(["/tx", "/tx/:token"]), dataItemRoute);
 
-// x402 payment routes
+// x402 payment routes (legacy endpoint - kept for backward compatibility)
 router.get("/v1/x402/price/:signatureType/:address", x402PriceRoute);
 router.post("/v1/x402/payment/:signatureType/:address", x402PaymentRoute);
 router.post("/v1/x402/finalize", x402FinalizeRoute);
 router.post("/x402/data-item/signed", dataItemRoute);
+
+// x402 pricing routes (Turbo-style token-based pricing)
+router.get("/price/x402/data-item/:token/:byteCount", x402DataItemPriceRoute);
+router.get("/price/x402/data/:token/:byteCount", x402RawDataPriceRoute);
+// Also serve on /v1 prefix for consistency
+router.get("/v1/price/x402/data-item/:token/:byteCount", x402DataItemPriceRoute);
+router.get("/v1/price/x402/data/:token/:byteCount", x402RawDataPriceRoute);
 
 /**
  * START TEMPORARY PATCH TO SUPPORT up.arweave.net

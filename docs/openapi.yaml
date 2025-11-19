@@ -254,6 +254,322 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
+  /price/x402/data-item/{token}/{byteCount}:
+    get:
+      tags:
+        - x402
+      summary: Get price for signed data item (Turbo-style)
+      description: |
+        Returns x402 payment requirements for uploading a complete, signed ANS-104 data item.
+
+        **Use this endpoint when you:**
+        - Already have a signed ANS-104 data item
+        - Know the exact byte count of your data item
+
+        **Token Format:** `{currency}-{network}`
+        - `usdc-base` - USDC on Base mainnet
+        - `usdc-base-sepolia` - USDC on Base Sepolia testnet
+        - `usdc-ethereum-mainnet` - USDC on Ethereum
+        - `usdc-polygon-mainnet` - USDC on Polygon
+
+        **Pricing:**
+        1. Byte count → Winston cost (via Arweave pricing)
+        2. Add 30% bundler fee (profit margin on top of Arweave costs)
+        3. Winston → USDC atomic units (via CoinGecko AR/USD rate)
+        4. Apply minimum threshold (0.001 USDC = 1,000 atomic units)
+
+        Returns standard x402 v1 payment requirements.
+      operationId: getX402DataItemPrice
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: Payment token in format {currency}-{network}
+          schema:
+            type: string
+            enum: [usdc-base, usdc-base-sepolia, usdc-ethereum-mainnet, usdc-polygon-mainnet]
+            example: usdc-base
+        - name: byteCount
+          in: path
+          required: true
+          description: Exact byte count of signed data item
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10737418240
+            example: 2048
+      responses:
+        '200':
+          description: x402 payment requirements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/X402PaymentRequiredResponse'
+              example:
+                x402Version: 1
+                accepts:
+                  - scheme: exact
+                    network: base
+                    maxAmountRequired: "1234"
+                    resource: "http://localhost:3001/v1/tx"
+                    description: "Upload data to Arweave via AR.IO Bundler"
+                    payTo: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+                    maxTimeoutSeconds: 300
+                    asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+                    extra:
+                      name: "USD Coin"
+                      version: "2"
+        '400':
+          description: Invalid token or byte count
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  token:
+                    type: string
+                  supported:
+                    type: array
+                    items:
+                      type: string
+              example:
+                error: "Invalid or unsupported token"
+                token: "invalid-token"
+                supported: ["usdc-base", "usdc-base-sepolia"]
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /price/x402/data/{token}/{byteCount}:
+    get:
+      tags:
+        - x402
+      summary: Get price for raw data (bundler creates data item)
+      description: |
+        Returns x402 payment requirements for uploading raw data where the bundler
+        will create the ANS-104 data item wrapper.
+
+        **Use this endpoint when you:**
+        - Have raw data (not a signed data item)
+        - Want the bundler to create and sign the data item
+        - Need pricing that includes ANS-104 wrapper overhead
+
+        **Overhead Estimation:**
+        The final data item size is estimated by adding:
+        - Raw data bytes (your data)
+        - ANS-104 wrapper (~1.1 KB for signature, owner, headers)
+        - User tags (if provided via `tags` parameter)
+        - Content-Type tag (if provided via `contentType` parameter)
+        - System tags (7 x402 metadata tags)
+
+        **System Tags Added:**
+        1. Bundler
+        2. Upload-Type
+        3. Payer-Address
+        4. X402-TX-Hash
+        5. X402-Payment-ID
+        6. X402-Network
+        7. Upload-Timestamp
+
+        **Response includes `sizeBreakdown`** showing detailed size calculation.
+      operationId: getX402RawDataPrice
+      parameters:
+        - name: token
+          in: path
+          required: true
+          description: Payment token in format {currency}-{network}
+          schema:
+            type: string
+            enum: [usdc-base, usdc-base-sepolia, usdc-ethereum-mainnet, usdc-polygon-mainnet]
+            example: usdc-base
+        - name: byteCount
+          in: path
+          required: true
+          description: Raw data byte count (before ANS-104 wrapping)
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10737418240
+            example: 1024
+        - name: tags
+          in: query
+          required: false
+          description: Number of user tags to include
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 100
+            default: 0
+            example: 3
+        - name: contentType
+          in: query
+          required: false
+          description: MIME type (adds Content-Type tag if provided)
+          schema:
+            type: string
+            example: "image/png"
+      responses:
+        '200':
+          description: x402 payment requirements with size breakdown
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/X402PaymentRequiredResponse'
+                  - type: object
+                    properties:
+                      sizeBreakdown:
+                        type: object
+                        properties:
+                          rawDataBytes:
+                            type: integer
+                            description: Original raw data size
+                          ans104Overhead:
+                            type: integer
+                            description: ANS-104 wrapper + tags overhead
+                          estimatedTotalBytes:
+                            type: integer
+                            description: Final estimated data item size
+                          tagCount:
+                            type: object
+                            properties:
+                              user:
+                                type: integer
+                              contentType:
+                                type: integer
+                              system:
+                                type: integer
+                              total:
+                                type: integer
+              example:
+                x402Version: 1
+                sizeBreakdown:
+                  rawDataBytes: 1024
+                  ans104Overhead: 1317
+                  estimatedTotalBytes: 2341
+                  tagCount:
+                    user: 3
+                    contentType: 1
+                    system: 7
+                    total: 11
+                accepts:
+                  - scheme: exact
+                    network: base
+                    maxAmountRequired: "1456"
+                    resource: "http://localhost:3001/v1/tx"
+                    description: "Upload data to Arweave via AR.IO Bundler"
+                    payTo: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+                    maxTimeoutSeconds: 300
+                    asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+        '400':
+          description: Invalid token, byte count, or tags parameter
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+              example:
+                error: "Invalid tags parameter"
+                message: "tags must be a non-negative integer"
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/price/x402/data-item/{token}/{byteCount}:
+    get:
+      tags:
+        - x402
+      summary: Get price for signed data item (with /v1 prefix)
+      description: |
+        **Identical to `/price/x402/data-item/{token}/{byteCount}`**
+
+        This endpoint is the same as the non-prefixed version, provided for consistency.
+        See `/price/x402/data-item/{token}/{byteCount}` for full documentation.
+      operationId: getX402DataItemPriceV1
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [usdc-base, usdc-base-sepolia, usdc-ethereum-mainnet, usdc-polygon-mainnet]
+        - name: byteCount
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10737418240
+      responses:
+        '200':
+          description: x402 payment requirements
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/X402PaymentRequiredResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /v1/price/x402/data/{token}/{byteCount}:
+    get:
+      tags:
+        - x402
+      summary: Get price for raw data (with /v1 prefix)
+      description: |
+        **Identical to `/price/x402/data/{token}/{byteCount}`**
+
+        This endpoint is the same as the non-prefixed version, provided for consistency.
+        See `/price/x402/data/{token}/{byteCount}` for full documentation.
+      operationId: getX402RawDataPriceV1
+      parameters:
+        - name: token
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [usdc-base, usdc-base-sepolia, usdc-ethereum-mainnet, usdc-polygon-mainnet]
+        - name: byteCount
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 10737418240
+        - name: tags
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 0
+            maximum: 100
+        - name: contentType
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: x402 payment requirements with size breakdown
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/X402PaymentRequiredResponse'
+                  - type: object
+                    properties:
+                      sizeBreakdown:
+                        type: object
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
   /v1/tx:
     post:
       tags:
@@ -378,7 +694,7 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /v1/tx/{id}/offset:
+  /v1/tx/{id}/offsets:
     get:
       tags:
         - status
@@ -386,7 +702,7 @@ paths:
       description: |
         Returns offset information for retrieving the data item from Arweave.
         Only available after the data item has been posted to Arweave.
-      operationId: getDataItemOffset
+      operationId: getDataItemOffsets
       parameters:
         - name: id
           in: path
@@ -430,6 +746,24 @@ paths:
                 x402Enabled: true
                 supportedNetworks: ['base', 'base-sepolia', 'ethereum', 'polygon']
                 maxUploadSize: 10737418240
+
+  /health:
+    get:
+      tags:
+        - status
+      summary: Health check endpoint
+      description: |
+        Returns a simple "OK" response to verify the service is running.
+        Used by monitoring systems and load balancers to check service health.
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "OK"
 
   /openapi.json:
     get:
@@ -696,6 +1030,90 @@ components:
           type: integer
           description: Data item size in bytes
           example: 1024
+
+    X402PaymentRequiredResponse:
+      type: object
+      description: Standard x402 v1 payment requirements response
+      required:
+        - x402Version
+        - accepts
+      properties:
+        x402Version:
+          type: integer
+          description: x402 protocol version
+          enum: [1]
+          example: 1
+        accepts:
+          type: array
+          description: List of acceptable payment methods
+          minItems: 1
+          items:
+            type: object
+            required:
+              - scheme
+              - network
+              - maxAmountRequired
+              - resource
+              - description
+              - payTo
+              - maxTimeoutSeconds
+              - asset
+            properties:
+              scheme:
+                type: string
+                enum: [exact]
+                description: Payment scheme (always "exact" for fixed-price uploads)
+              network:
+                type: string
+                description: EVM network identifier (e.g., "base", "base-sepolia")
+                example: base
+              maxAmountRequired:
+                type: string
+                description: Maximum USDC amount required in atomic units (6 decimals)
+                example: "1234"
+              resource:
+                type: string
+                format: uri
+                description: Upload endpoint URL
+                example: "http://localhost:3001/v1/tx"
+              description:
+                type: string
+                description: Human-readable description of the service
+                example: "Upload data to Arweave via AR.IO Bundler"
+              mimeType:
+                type: string
+                description: Response content type
+                default: "application/json"
+              outputSchema:
+                type: object
+                description: JSON schema describing the upload response structure
+                additionalProperties: true
+              payTo:
+                type: string
+                pattern: '^0x[a-fA-F0-9]{40}$'
+                description: Bundler's payment receiver address
+                example: "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb"
+              maxTimeoutSeconds:
+                type: integer
+                description: Maximum time to complete payment (seconds)
+                example: 300
+              asset:
+                type: string
+                pattern: '^0x[a-fA-F0-9]{40}$'
+                description: USDC token contract address on the specified network
+                example: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+              extra:
+                type: object
+                description: Additional token metadata for EIP-712 domain
+                properties:
+                  name:
+                    type: string
+                    description: Token name
+                    example: "USD Coin"
+                  version:
+                    type: string
+                    description: EIP-712 domain version for USDC contract
+                    example: "2"
 
     ServiceInfo:
       type: object

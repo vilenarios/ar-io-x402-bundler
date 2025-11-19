@@ -247,7 +247,7 @@ Upload → new-data-item → plan-bundle → prepare-bundle → post-bundle → 
 - `X402_PAYMENT_ADDRESS` - Your Ethereum address for receiving USDC (required)
 - `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET` - Coinbase CDP credentials (required for mainnet, optional for testnet)
 - `X402_FRAUD_TOLERANCE_PERCENT` - Byte count tolerance for fraud detection (default: 5%)
-- `X402_PRICING_BUFFER_PERCENT` - Price buffer for safety margin (default: 15%)
+- `X402_FEE_PERCENT` - Bundler fee / profit margin on top of Arweave costs (default: 30%)
 
 **Database**:
 - `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD` - PostgreSQL connection

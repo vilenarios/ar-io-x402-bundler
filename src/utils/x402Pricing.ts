@@ -19,10 +19,10 @@ import axios from "axios";
 import logger from "../logger";
 import { W, Winston } from "../types/types";
 
-const x402PricingBufferPercent = 10; // 10% buffer for price fluctuations
-
 /**
  * Simple x402 pricing oracle for converting Winston to USDC
+ * Note: This oracle does raw conversion only. Bundler fees are applied
+ * separately in the pricing helpers (x402PricingHelpers.ts)
  */
 export class X402PricingOracle {
   private arPriceCache: { price: number; timestamp: number } | null = null;
@@ -88,11 +88,9 @@ export class X402PricingOracle {
     // Convert AR to USD
     const usdAmount = arAmount * arPriceUSD;
 
-    // Add pricing buffer to account for price fluctuations
-    const bufferedUsdAmount = usdAmount * (1 + x402PricingBufferPercent / 100);
-
     // Convert USD to USDC atomic units (1 USDC = 10^6 atomic units)
-    const usdcAtomicUnits = Math.ceil(bufferedUsdAmount * 1e6);
+    // Note: Bundler fee is applied separately in x402PricingHelpers.ts
+    const usdcAtomicUnits = Math.ceil(usdAmount * 1e6);
 
     // Ensure minimum of 0.1 cent (1000 atomic units = 0.001 USDC)
     const minUsdcAtomicUnits = 1000;
@@ -103,7 +101,6 @@ export class X402PricingOracle {
       arAmount,
       arPriceUSD,
       usdAmount,
-      bufferedUsdAmount,
       usdcAtomicUnits: finalAmount,
     });
 

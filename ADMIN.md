@@ -277,7 +277,7 @@ X402_FACILITATORS_BASE_TESTNET=https://facilitator.mogami.tech
 
 # Advanced Settings
 X402_FRAUD_TOLERANCE_PERCENT=5      # ±5% byte count tolerance
-X402_PRICING_BUFFER_PERCENT=15      # 15% price buffer
+X402_FEE_PERCENT=30                 # 30% bundler fee (profit margin)
 X402_PAYMENT_TIMEOUT_MS=300000      # 5 minutes
 ```
 
