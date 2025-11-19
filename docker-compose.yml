@@ -169,6 +169,7 @@ services:
       RAW_DATA_ITEM_JWK_FILE: ${RAW_DATA_ITEM_JWK_FILE}
     volumes:
       - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
+      - ${RAW_DATA_ITEM_JWK_FILE:-/dev/null}:${RAW_DATA_ITEM_JWK_FILE:-/dev/null}:ro
       - bundler-temp:/app/temp
       - bundler-data:/app/upload-service-data
     networks:
@@ -254,6 +255,7 @@ services:
       RAW_DATA_ITEM_JWK_FILE: ${RAW_DATA_ITEM_JWK_FILE}
     volumes:
       - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
+      - ${RAW_DATA_ITEM_JWK_FILE:-/dev/null}:${RAW_DATA_ITEM_JWK_FILE:-/dev/null}:ro
       - bundler-temp:/app/temp
       - bundler-data:/app/upload-service-data
     networks:
@@ -303,6 +305,14 @@ services:
       # Redis - Queue (BullMQ)
       REDIS_HOST: redis-queue
       REDIS_PORT_QUEUES: 6379
+
+      # x402 Configuration (needed by constants.js)
+      X402_PAYMENT_ADDRESS: ${X402_PAYMENT_ADDRESS}
+      X402_FRAUD_TOLERANCE_PERCENT: ${X402_FRAUD_TOLERANCE_PERCENT:-5}
+      X402_PRICING_BUFFER_PERCENT: ${X402_PRICING_BUFFER_PERCENT:-15}
+      X402_PAYMENT_TIMEOUT_MS: ${X402_PAYMENT_TIMEOUT_MS:-300000}
+      CDP_API_KEY_ID: ${CDP_API_KEY_ID}
+      CDP_API_KEY_SECRET: ${CDP_API_KEY_SECRET}
     networks:
       - ar-io-x402-bundler-network
       - ar-io-network

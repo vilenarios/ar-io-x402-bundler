@@ -2,12 +2,20 @@
  * System Health Check Query Functions
  *
  * Checks health of:
- * - PM2 Services (upload-api, payment-api, workers)
+ * - PM2 Services (upload-api, payment-api, workers) - only for local PM2 deployment
  * - Infrastructure (PostgreSQL, Redis, MinIO)
  * - BullMQ Queues
  */
 
-const pm2 = require('pm2');
+// PM2 is optional - only needed for local PM2 deployment, not Docker
+let pm2 = null;
+try {
+  pm2 = require('pm2');
+} catch (err) {
+  // PM2 not available - will skip service health checks
+  console.warn('PM2 module not available - service health checks disabled');
+}
+
 const { promisify } = require('util');
 
 /**
@@ -50,6 +58,11 @@ async function getSystemHealth({
  * Get PM2 service health status
  */
 async function getServiceHealth() {
+  // PM2 not available (Docker deployment) - return empty object
+  if (!pm2) {
+    return {};
+  }
+
   return new Promise((resolve, reject) => {
     pm2.connect((err) => {
       if (err) {

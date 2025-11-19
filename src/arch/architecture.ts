@@ -31,6 +31,7 @@ import { getReaderConfig, getWriterConfig } from "./db/knexConfig";
 import { PostgresDatabase } from "./db/postgres";
 import { getElasticacheService } from "./elasticacheService";
 import { ObjectStore } from "./objectStore";
+import { PricingService } from "./pricing";
 import { X402Service } from "./x402Service";
 
 export interface Architecture {
@@ -38,6 +39,7 @@ export interface Architecture {
   database: Database;
   dataItemOffsetsDB: DataItemOffsetsDB;
   cacheService: CacheService;
+  pricingService: PricingService;
   x402Service: X402Service;
   logger: winston.Logger;
   arweaveGateway: ArweaveGateway;
@@ -57,6 +59,7 @@ export const defaultArchitecture: Architecture = {
   dataItemOffsetsDB: new DataItemOffsetsDB(writerKnex, globalLogger),
   objectStore: getS3ObjectStore(),
   cacheService: getElasticacheService(),
+  pricingService: new PricingService(),
   x402Service: new X402Service(x402Networks),
   logger: globalLogger,
   getArweaveWallet: () => getArweaveWallet(),

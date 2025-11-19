@@ -36,7 +36,7 @@ import { W } from "../../types/winston";
  */
 export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
   const logger = ctx.state.logger;
-  const { paymentDatabase, pricingService, x402Service } = ctx.state;
+  const { database, pricingService, x402Service } = ctx.state;
 
   const { signatureType: signatureTypeParam, address } = ctx.params;
   const {
@@ -71,24 +71,12 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
     );
   }
 
-  const mode: X402PaymentMode =
-    modeParam && x402PaymentModes.includes(modeParam as X402PaymentMode)
-      ? (modeParam as X402PaymentMode)
-      : defaultX402PaymentMode;
+  // x402-only bundler: only PAYG mode supported (no account balances)
+  const mode: X402PaymentMode = "payg";
 
-  // Validate mode-specific requirements
-  // Note: dataItemId is optional for PAYG (will be linked after data item creation)
-  if ((mode === "payg" || mode === "hybrid") && !byteCountParam) {
-    throw new X402PaymentError(
-      "byteCount is required for PAYG and hybrid modes"
-    );
-  }
-
-  // Hybrid mode still requires dataItemId upfront (for existing flow compatibility)
-  if (mode === "hybrid" && !dataItemId) {
-    throw new X402PaymentError(
-      "dataItemId is required for hybrid mode"
-    );
+  // PAYG mode requires byteCount
+  if (!byteCountParam) {
+    throw new X402PaymentError("byteCount is required for PAYG mode");
   }
 
   const signatureType = parseInt(signatureTypeParam, 10);
@@ -149,10 +137,11 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
     let usdcAmountRequired = "0";
 
     if (byteCount) {
-      const { reward: winstonPrice } =
-        await pricingService.getTxAttributesForDataItems([
-          { byteCount, signatureType },
-        ]);
+      const txAttributes = await pricingService.getTxAttributesForDataItems([
+        { byteCount, signatureType } as any,
+      ]);
+
+      const winstonPrice = txAttributes.reward ? parseInt(txAttributes.reward, 10) : 0;
 
       // Add bundler fee (profit margin on top of Arweave costs)
       winstonCost = W(
@@ -244,8 +233,8 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
     // Convert USDC paid to Winston (using singleton for caching)
     const wincPaid = await x402PricingOracle.getWinstonForUSDC(authorization.value);
 
-    // Create payment transaction record
-    const payment = await paymentDatabase.createX402Payment({
+    // Create payment transaction record (x402-only: PAYG mode, no account balances)
+    const payment = await database.createX402Payment({
       userAddress: address,
       userAddressType: addressType,
       txHash: settlement.transactionHash!,
@@ -260,101 +249,23 @@ export async function x402PaymentRoute(ctx: KoaContext, next: Next) {
       payerAddress: authorization.from,
     });
 
-    // Handle different modes
-    let wincReserved = W("0");
-    let wincCredited = W("0");
-
-    if (mode === "payg") {
-      // Pay-as-you-go: Reserve winc for this specific data item
-      wincReserved = winstonCost;
-
-      // Only create reservation if dataItemId exists
-      // For x402 raw uploads, reservation is created later via link endpoint
-      if (dataItemId) {
-        await paymentDatabase.createX402PaymentReservation({
-          dataItemId: dataItemId as DataItemId,
-          x402PaymentId: payment.id,
-          wincReserved,
-          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(), // 1 hour
-        });
-
-        logger.info("Created x402 PAYG reservation", {
-          dataItemId,
-          wincReserved,
-        });
-      } else {
-        logger.info("x402 PAYG payment settled - reservation will be created on link", {
-          paymentId: payment.id,
-          wincReserved,
-        });
-      }
-    } else if (mode === "topup") {
-      // Top-up: Credit entire amount to user's balance
-      wincCredited = wincPaid;
-
-      await paymentDatabase.adjustUserWinstonBalance({
-        userAddress: address,
-        userAddressType: addressType,
-        winstonAmount: wincCredited,
-        changeReason: "x402_topup",
-        changeId: payment.id,
-      });
-
-      logger.info("X402 top-up - credited balance", {
-        address,
-        wincCredited,
-        paymentId: payment.id,
-      });
-    } else {
-      // Hybrid: Reserve for data item, credit excess
-      wincReserved = winstonCost;
-      wincCredited = wincPaid.minus(winstonCost);
-
-      if (wincReserved.isGreaterThan(W(0))) {
-        await paymentDatabase.createX402PaymentReservation({
-          dataItemId: dataItemId as DataItemId,
-          x402PaymentId: payment.id,
-          wincReserved,
-          expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-        });
-      }
-
-      if (wincCredited.isGreaterThan(W(0))) {
-        // Credit excess to balance
-        await paymentDatabase.adjustUserWinstonBalance({
-          userAddress: address,
-          userAddressType: addressType,
-          winstonAmount: wincCredited,
-          changeReason: "x402_hybrid_excess",
-          changeId: payment.id,
-        });
-
-        logger.info("X402 hybrid - credited excess", {
-          address,
-          wincCredited,
-          paymentId: payment.id,
-        });
-      }
-    }
-
-    logger.info("X402 payment successful", {
+    logger.info("X402 PAYG payment successful", {
       address,
       mode,
       txHash: settlement.transactionHash,
-      wincPaid,
-      wincReserved,
-      wincCredited,
+      paymentId: payment.paymentId,
+      wincPaid: wincPaid.toString(),
+      dataItemId: dataItemId || undefined,
+      uploadId: uploadId || undefined,
     });
 
     ctx.status = 200;
     ctx.body = {
       success: true,
-      paymentId: payment.id,
+      paymentId: payment.paymentId,
       txHash: settlement.transactionHash,
       network: network,
-      wincPaid,
-      wincReserved: wincReserved.toString(),
-      wincCredited: wincCredited.toString(),
+      wincPaid: wincPaid.toString(),
       mode,
       dataItemId: dataItemId || undefined,
       uploadId: uploadId || undefined,

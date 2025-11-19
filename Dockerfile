@@ -59,7 +59,9 @@ COPY --chown=bundler:bundler --from=builder /app/lib ./lib
 COPY --chown=bundler:bundler --from=builder /app/node_modules ./node_modules
 COPY --chown=bundler:bundler .env.sample ./
 COPY --chown=bundler:bundler admin-server.js ./
+COPY --chown=bundler:bundler admin ./admin
 COPY --chown=bundler:bundler ecosystem.config.js ./
+COPY --chown=bundler:bundler docs ./docs
 
 # Switch to non-root user
 USER bundler

@@ -40,7 +40,7 @@ import { generatePaywallHtml } from "./x402PaywallHtml";
  */
 export async function x402PriceRoute(ctx: KoaContext, next: Next) {
   const logger = ctx.state.logger;
-  const { pricingService, database } = ctx.state;
+  const { pricingService } = ctx.state;
 
   const { signatureType: signatureTypeParam, address } = ctx.params;
   const { bytes: bytesParam, uploadId, deposit: depositParam } = ctx.query;
@@ -117,10 +117,11 @@ export async function x402PriceRoute(ctx: KoaContext, next: Next) {
     // For byte-based pricing, calculate from Winston cost
     else if (byteCount !== null) {
       // Get pricing from pricing service (Winston cost)
-      const { reward: winstonPrice } =
-        await pricingService.getTxAttributesForDataItems([
-          { byteCount: byteCount as ByteCount, signatureType },
-        ]);
+      const txAttributes = await pricingService.getTxAttributesForDataItems([
+        { byteCount: byteCount as ByteCount, signatureType } as any,
+      ]);
+
+      const winstonPrice = txAttributes.reward ? parseInt(txAttributes.reward, 10) : 0;
 
       // Add bundler fee (profit margin on top of Arweave costs)
       const winstonWithFee = Math.ceil(

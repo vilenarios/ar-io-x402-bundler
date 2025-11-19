@@ -9,8 +9,8 @@
  * - Recent uploads
  */
 
-const uploadServicePath = require('path').join(__dirname, '../../../upload-service');
-const { tableNames, columnNames } = require(uploadServicePath + '/lib/arch/db/dbConstants');
+// In Docker container: admin files are at /app/admin/ and lib files are at /app/lib/
+const { tableNames, columnNames } = require('../../lib/arch/db/dbConstants');
 
 /**
  * Get comprehensive upload statistics

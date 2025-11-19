@@ -56,6 +56,8 @@ COPY --chown=admin:admin --from=builder /app/node_modules ./node_modules
 COPY --chown=admin:admin admin-server.js ./
 COPY --chown=admin:admin admin ./admin
 COPY --chown=admin:admin --from=builder /app/lib/constants.js ./lib/
+COPY --chown=admin:admin --from=builder /app/lib/types ./lib/types
+COPY --chown=admin:admin --from=builder /app/lib/arch/db ./lib/arch/db
 COPY --chown=admin:admin --from=builder /app/lib/arch/queues ./lib/arch/queues
 
 # Switch to non-root user

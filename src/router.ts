@@ -19,7 +19,7 @@ import Router from "koa-router";
 import * as promClient from "prom-client";
 
 import { MetricRegistry } from "./metricRegistry";
-import { dataItemRoute } from "./routes/dataItemPost";
+import { dataItemRoute, signedDataItemRoute, unsignedDataItemRoute } from "./routes/dataItemPost";
 import { rootResponse } from "./routes/info";
 import {
   createMultiPartUpload,
@@ -31,7 +31,6 @@ import {
 import { offsetsHandler } from "./routes/offsets";
 import { statusHandler } from "./routes/status";
 import { swaggerDocs, swaggerDocsJSON } from "./routes/swagger";
-import { x402FinalizeRoute } from "./routes/x402/x402Finalize";
 import { x402PaymentRoute } from "./routes/x402/x402Payment";
 import { x402PriceRoute } from "./routes/x402/x402Price";
 import { x402DataItemPriceRoute } from "./routes/x402/x402DataItemPrice";
@@ -47,19 +46,42 @@ const router = new Router() as any;
 const serveRoutesAndV1 = (path: string[]) =>
   path.flatMap((p) => [p, `/v1${p}`]);
 
-// Raw data post routes
-router.post(serveRoutesAndV1(["/tx", "/tx/:token"]), dataItemRoute);
+// ========================================
+// Upload Endpoints (x402-only)
+// ========================================
 
-// x402 payment routes (legacy endpoint - kept for backward compatibility)
-router.get("/v1/x402/price/:signatureType/:address", x402PriceRoute);
-router.post("/v1/x402/payment/:signatureType/:address", x402PaymentRoute);
-router.post("/v1/x402/finalize", x402FinalizeRoute);
+// 1. EXPLICIT ROUTES (Recommended - clear intent)
+// -------------------------------------------------
+// Signed ANS-104 data item upload (explicit)
+// - Requires x402 payment via X-PAYMENT header OR whitelisted wallet
+// - Client provides pre-signed ANS-104 data item
+router.post("/x402/upload/signed", signedDataItemRoute);
+
+// Unsigned raw data upload (explicit)
+// - ALWAYS requires x402 payment (no whitelist exemption)
+// - Server signs the data item using rawDataItemWallet
+// - Supports JSON envelope or binary + X-Tag-* headers
+router.post("/x402/upload/unsigned", unsignedDataItemRoute);
+
+// 2. BACKWARDS COMPATIBILITY ROUTES (Auto-detection)
+// -------------------------------------------------
+// Legacy upload endpoints with smart detection
+// - Auto-detects signed ANS-104 vs unsigned raw data
+// - For signed: same as /x402/upload/signed
+// - For unsigned: same as /x402/upload/unsigned (if RAW_DATA_UPLOADS_ENABLED=true)
+router.post(serveRoutesAndV1(["/tx", "/tx/:token"]), dataItemRoute);
 router.post("/x402/data-item/signed", dataItemRoute);
 
-// x402 pricing routes (Turbo-style token-based pricing)
+// ========================================
+// x402 Payment Routes
+// ========================================
+// Legacy 3-stage flow (kept for backward compatibility)
+router.get("/v1/x402/price/:signatureType/:address", x402PriceRoute);
+router.post("/v1/x402/payment/:signatureType/:address", x402PaymentRoute);
+
+// Turbo-style token-based pricing (recommended)
 router.get("/price/x402/data-item/:token/:byteCount", x402DataItemPriceRoute);
 router.get("/price/x402/data/:token/:byteCount", x402RawDataPriceRoute);
-// Also serve on /v1 prefix for consistency
 router.get("/v1/price/x402/data-item/:token/:byteCount", x402DataItemPriceRoute);
 router.get("/v1/price/x402/data/:token/:byteCount", x402RawDataPriceRoute);
 

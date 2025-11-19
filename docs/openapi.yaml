@@ -6,10 +6,13 @@ info:
 
     ## x402 Payment Flow
 
-    1. **Get Price Quote**: `GET /v1/x402/price/{signatureType}/{address}?bytes={size}`
+    1. **Get Price Quote**: `GET /v1/x402/price/{signatureType}/{address}?bytes={size}` (open, no auth required)
     2. **Create EIP-712 Signature**: Sign payment authorization using wallet
-    3. **Upload with Payment**: `POST /v1/tx` with `X-PAYMENT` header containing base64-encoded payment payload
-    4. **Finalization** (automatic): Service validates actual byte count and applies fraud detection (±5% tolerance)
+    3. **Upload with Payment**:
+       - **Signed Data Items**: `POST /x402/upload/signed` (recommended) or `POST /v1/tx` (backwards compatible)
+       - **Raw Data**: `POST /x402/upload/unsigned` (bundler creates & signs data item)
+    4. **Payment Verification**: Include `X-PAYMENT` header with base64-encoded payment payload
+    5. **Finalization** (automatic): Service validates actual byte count and applies fraud detection (±5% tolerance)
 
     ## Supported Networks
 
@@ -189,68 +192,197 @@ paths:
         '500':
           $ref: '#/components/responses/InternalError'
 
-  /v1/x402/finalize:
+  /x402/upload/signed:
     post:
       tags:
-        - x402
-      summary: Finalize x402 payment with fraud detection
+        - upload
+      summary: Upload signed ANS-104 data item (recommended)
       description: |
-        **Internal endpoint** - Called automatically after data upload completes.
+        **Recommended endpoint** for uploading pre-signed ANS-104 data items with x402 payment.
 
-        Applies fraud detection by comparing declared vs actual byte count:
-        - **Within ±5% tolerance**: Payment confirmed, USDC transferred
-        - **Under-declared (>5%)**: Fraud penalty, full payment charged
-        - **Over-declared (>5%)**: Refund issued for excess amount
+        This is the explicit, documented way to upload signed data items. Use this when:
+        - You have a complete ANS-104 data item with signature
+        - You want clear, self-documenting API calls
+        - You're building new integrations
 
-        This endpoint triggers the actual USDC transfer using Coinbase CDP API
-        (mainnet) or on-chain settlement (testnet).
-      operationId: finalizeX402Payment
+        **Flow:**
+        1. Create signed ANS-104 data item (signatureType 1=Arweave, 3=Ethereum, 4=Solana)
+        2. Get price quote: `GET /v1/x402/price/3/{address}?bytes={size}` (no payment required)
+        3. Create EIP-712 signature for USDC payment authorization
+        4. Upload with `X-PAYMENT` header containing base64-encoded payment JSON
+
+        **Payment Options:**
+        - **With x402 Payment**: Include `X-PAYMENT` header (required for non-whitelisted wallets)
+        - **Whitelisted Wallets**: Can upload without payment if wallet is on allow list
+
+        **Fraud Detection:**
+        After upload, the service compares `Content-Length` header to actual data size.
+        - Within ±5%: Payment confirmed
+        - Over 5% under-declared: Full payment charged (fraud penalty)
+        - Over 5% over-declared: Excess refunded
+      operationId: uploadSignedDataItem
+      parameters:
+        - name: X-PAYMENT
+          in: header
+          required: false
+          description: |
+            Base64-encoded x402 payment payload (required unless wallet is whitelisted).
+
+            **Format:** Base64 encode this JSON:
+            ```json
+            {
+              "transferParams": {
+                "from": "0x...",
+                "to": "0x...",
+                "value": "1234",
+                "validAfter": 0,
+                "validBefore": 1730754000,
+                "nonce": "0x..."
+              },
+              "signature": "0x...",
+              "network": "base-sepolia",
+              "byteCount": 1024
+            }
+            ```
+          schema:
+            type: string
+            format: byte
+        - name: Content-Length
+          in: header
+          required: true
+          description: Exact byte count of data item (used for fraud detection)
+          schema:
+            type: integer
+            example: 2048
       requestBody:
         required: true
+        description: Binary ANS-104 data item (already signed)
         content:
-          application/json:
+          application/octet-stream:
             schema:
-              type: object
-              required:
-                - dataItemId
-                - actualByteCount
-              properties:
-                dataItemId:
-                  type: string
-                  description: Data item transaction ID
-                  example: 'abcdef1234567890abcdef1234567890abcdef1234567890'
-                actualByteCount:
-                  type: integer
-                  minimum: 1
-                  description: Actual number of bytes uploaded
-                  example: 1050
+              type: string
+              format: binary
       responses:
         '200':
-          description: Payment finalized successfully
+          description: Data item accepted for bundling
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '402':
+          description: Payment required (wallet not whitelisted and no valid payment provided)
           content:
             application/json:
               schema:
                 type: object
                 properties:
-                  status:
+                  error:
                     type: string
-                    enum: [confirmed, refunded, fraud_penalty]
-                    description: Final payment status
-                  refundWinc:
-                    type: string
-                    description: Refund amount in Winston (if over-declared)
-                    nullable: true
                   message:
                     type: string
-                    description: Human-readable status message
               example:
-                status: 'confirmed'
-                refundWinc: null
-                message: 'Payment confirmed within tolerance'
+                error: "Payment required for upload"
+                message: "Please provide x402 payment via X-PAYMENT header or use a whitelisted wallet"
+        '413':
+          description: Payload too large (exceeds MAX_DATA_ITEM_SIZE)
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /x402/upload/unsigned:
+    post:
+      tags:
+        - upload
+      summary: Upload raw data (bundler creates & signs data item)
+      description: |
+        **Recommended endpoint** for uploading raw data where the bundler creates the ANS-104 wrapper.
+
+        This endpoint is designed for AI agents and stateless applications that cannot create
+        signed ANS-104 data items. The bundler will:
+        - Wrap your raw data in an ANS-104 data item structure
+        - Sign it with the bundler's wallet
+        - Add system tags (bundler, upload type, payment info, timestamp)
+        - Apply x402 payment and fraud detection
+
+        **Use this when:**
+        - You have raw data (images, JSON, text, etc.) without ANS-104 wrapper
+        - Your application can't create cryptographic signatures
+        - You're building AI agents or serverless functions
+
+        **Flow:**
+        1. Get price quote: `GET /price/x402/data/usdc-base/{byteCount}?tags=3&contentType=image/png`
+        2. Create EIP-712 signature for payment
+        3. Upload raw data with `X-PAYMENT` header
+
+        **System Tags Added:**
+        - `Bundler`: AR.IO Bundler service identifier
+        - `Upload-Type`: "raw-data"
+        - `Payer-Address`: Ethereum address that paid
+        - `X402-TX-Hash`: USDC transaction hash
+        - `X402-Payment-ID`: Internal payment ID
+        - `X402-Network`: Network used (base, ethereum, etc.)
+        - `Upload-Timestamp`: ISO 8601 timestamp
+
+        **Optional User Tags:**
+        Include custom tags via query parameters (coming soon) or multipart upload.
+      operationId: uploadUnsignedData
+      parameters:
+        - name: X-PAYMENT
+          in: header
+          required: true
+          description: Base64-encoded x402 payment payload (required for raw data uploads)
+          schema:
+            type: string
+            format: byte
+        - name: Content-Type
+          in: header
+          required: false
+          description: MIME type of raw data (added as tag if provided)
+          schema:
+            type: string
+            example: "image/png"
+        - name: Content-Length
+          in: header
+          required: true
+          description: Exact byte count of raw data (fraud detection applies to final data item size)
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        description: Raw binary data (will be wrapped in ANS-104 data item)
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+          image/*:
+            schema:
+              type: string
+              format: binary
+          application/json:
+            schema:
+              type: object
+          text/plain:
+            schema:
+              type: string
+      responses:
+        '200':
+          description: Data wrapped, signed, and accepted for bundling
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
         '400':
           $ref: '#/components/responses/BadRequest'
-        '404':
-          $ref: '#/components/responses/NotFound'
+        '402':
+          description: Payment required or invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          description: Payload too large
         '500':
           $ref: '#/components/responses/InternalError'
 
@@ -574,37 +706,36 @@ paths:
     post:
       tags:
         - upload
-      summary: Upload signed data item
+      summary: Upload data item (auto-detects signed vs unsigned)
       description: |
-        Upload a signed ANS-104 data item with x402 payment.
+        **Legacy/backwards-compatible endpoint** that auto-detects content type.
 
-        **Flow:**
-        1. Get price quote from `/v1/x402/price`
-        2. Create EIP-712 signature for payment
-        3. Verify payment at `/v1/x402/payment`
-        4. Upload data with `X-PAYMENT` header containing base64-encoded payment JSON
+        This endpoint maintains backwards compatibility with existing clients by detecting
+        whether the payload is a signed ANS-104 data item or raw data.
 
-        **Payment Header Format:**
-        ```json
-        {
-          "paymentId": "pmt_xxx",
-          "signature": "0x...",
-          "transferParams": {...},
-          "network": "base-sepolia"
-        }
-        ```
+        **Detection Logic:**
+        - If binary data starts with ANS-104 signature → treats as signed data item
+        - Otherwise → treats as raw data and wraps in ANS-104 data item
 
-        The service will:
-        - Verify payment authorization
-        - Accept data item for bundling
-        - Queue async jobs (bundling, posting to Arweave)
-        - Finalize payment with fraud detection
+        **⚠️ Deprecation Notice:**
+        For new integrations, use the explicit endpoints instead:
+        - `POST /x402/upload/signed` - for signed data items
+        - `POST /x402/upload/unsigned` - for raw data
+
+        The explicit endpoints provide clearer API semantics and better documentation.
+
+        **Payment:**
+        - Whitelisted wallets can upload signed data items without payment
+        - All other uploads require x402 payment via `X-PAYMENT` header
       operationId: uploadDataItem
       parameters:
         - name: X-PAYMENT
           in: header
-          required: true
-          description: Base64-encoded x402 payment payload
+          required: false
+          description: |
+            Base64-encoded x402 payment payload (required for non-whitelisted wallets).
+
+            For backwards compatibility with existing clients.
           schema:
             type: string
             format: byte
@@ -648,6 +779,54 @@ paths:
                 $ref: '#/components/schemas/Error'
               example:
                 error: 'Data item exceeds maximum size of 10GB'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /x402/data-item/signed:
+    post:
+      tags:
+        - upload
+      summary: Upload signed data item (backwards compatible)
+      description: |
+        **Backwards-compatible endpoint** for uploading signed ANS-104 data items.
+
+        This endpoint exists for compatibility with clients expecting the `/x402/data-item/signed` path.
+        It behaves identically to `/v1/tx` (auto-detection of content type).
+
+        **⚠️ Deprecation Notice:**
+        New integrations should use `/x402/upload/signed` instead for clearer API semantics.
+
+        See `/x402/upload/signed` for full documentation.
+      operationId: uploadSignedDataItemLegacy
+      parameters:
+        - name: X-PAYMENT
+          in: header
+          required: false
+          description: Base64-encoded x402 payment payload (required for non-whitelisted wallets)
+          schema:
+            type: string
+            format: byte
+      requestBody:
+        required: true
+        description: Binary ANS-104 data item
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: Data item accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UploadResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '402':
+          $ref: '#/components/responses/PaymentRequired'
+        '413':
+          description: Payload too large
         '500':
           $ref: '#/components/responses/InternalError'
 

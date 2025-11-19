@@ -29,6 +29,7 @@ import {
 } from "../bundles/streamingDataItem";
 import { signatureTypeInfo } from "../constants";
 import {
+  allowListPublicAddresses,
   anchorLength,
   blocklistedAddresses,
   dataCaches,
@@ -43,11 +44,13 @@ import {
   signatureTypeLength,
   skipOpticalPostAddresses,
   targetLength,
+  x402FeePercent,
+  x402PaymentTimeoutMs,
 } from "../constants";
 import globalLogger from "../logger";
 import { MetricRegistry } from "../metricRegistry";
 import { KoaContext } from "../server";
-import { ParsedDataItemHeader, SignatureConfig } from "../types/types";
+import { ByteCount, DataItemId, ParsedDataItemHeader, SignatureConfig } from "../types/types";
 import { W } from "../types/winston";
 import {
   errorResponse,
@@ -102,14 +105,52 @@ ensureDataItemsBackupDirExists().catch((error) => {
 
 export const inMemoryDataItemThreshold = 10 * 1024; // 10 KiB
 
+/**
+ * Explicit route handler for SIGNED data items only
+ * Route: POST /x402/upload/signed
+ * No auto-detection - assumes request is a signed ANS-104 data item
+ */
+export async function signedDataItemRoute(ctx: KoaContext, next: Next) {
+  // Call dataItemRoute but mark to skip raw data detection
+  ctx.state.skipRawDataDetection = true;
+  return dataItemRoute(ctx, next);
+}
+
+/**
+ * Explicit route handler for UNSIGNED raw data only
+ * Route: POST /x402/upload/unsigned
+ * No auto-detection - assumes request is raw data requiring server signing
+ */
+export async function unsignedDataItemRoute(ctx: KoaContext, next: Next) {
+  const logger = ctx.state.logger;
+
+  logger.info("Processing unsigned raw data upload request");
+
+  // Buffer the entire body for raw data handling
+  const chunks: Buffer[] = [];
+  for await (const chunk of ctx.req) {
+    chunks.push(chunk);
+  }
+  const rawBody = Buffer.concat(chunks);
+
+  return handleRawDataUpload(ctx, rawBody);
+}
+
+/**
+ * Smart route handler with auto-detection (backwards compatibility)
+ * Routes: POST /tx, POST /v1/tx, POST /x402/data-item/signed
+ * Auto-detects whether request is signed ANS-104 or unsigned raw data
+ */
 export async function dataItemRoute(ctx: KoaContext, next: Next) {
   let { logger } = ctx.state;
 
   // Smart detection: Check if this is raw data or a signed ANS-104 data item
   // For raw data uploads (enabled via feature flag), we handle differently
+  // Skip detection if explicitly requested (e.g., from signedDataItemRoute)
+  const skipRawDataDetection = ctx.state.skipRawDataDetection === true;
   const rawDataUploadsEnabled = process.env.RAW_DATA_UPLOADS_ENABLED === "true";
 
-  if (rawDataUploadsEnabled) {
+  if (rawDataUploadsEnabled && !skipRawDataDetection) {
     // Peek at request to determine if it's ANS-104 or raw data
     // Strategy: Check for X-Tag-* headers or non-octet-stream Content-Type
     const contentType = ctx.req.headers?.["content-type"];
@@ -284,9 +325,181 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
   );
   await markInFlight({ dataItemId, cacheService, logger });
 
-  // x402-bundler-lite: No inline payment verification
-  // Users handle payment separately via x402 API routes (/v1/x402/price, /v1/x402/payment)
-  logger.debug("x402-bundler-lite: Proceeding with upload without payment verification");
+  // x402 Payment Verification (with whitelist exemption)
+  const isWhitelisted = allowListPublicAddresses.includes(ownerPublicAddress);
+  const paymentHeaderValue = ctx.headers["x-payment"] as string | undefined;
+
+  if (!isWhitelisted && !paymentHeaderValue) {
+    // No payment and not whitelisted - return 402 Payment Required
+    await removeFromInFlight({ dataItemId, cacheService, logger });
+    logger.info("Upload requires x402 payment (wallet not whitelisted)", {
+      ownerPublicAddress,
+      dataItemId,
+    });
+
+    ctx.status = 402;
+    ctx.set("X-Payment-Required", "x402-1");
+    ctx.body = {
+      error: "Payment required for upload",
+      message: "Please provide x402 payment via X-PAYMENT header or use a whitelisted wallet",
+    };
+    return next();
+  }
+
+  // Verify x402 payment if provided (even if whitelisted, honor payment if sent)
+  let x402PaymentId: string | undefined;
+  let x402TxHash: string | undefined;
+  let x402Network: string | undefined;
+
+  if (paymentHeaderValue) {
+    try {
+      const { x402PricingOracle } = await import("../x402/x402PricingOracle");
+      const { x402Service, pricingService } = ctx.state;
+
+      // Parse payment header
+      const paymentPayload = JSON.parse(
+        Buffer.from(paymentHeaderValue, "base64").toString("utf-8")
+      );
+      const authorization = paymentPayload.payload?.authorization;
+      x402Network = paymentPayload.network;
+
+      if (!authorization || !x402Network) {
+        throw new Error("Invalid payment header format");
+      }
+
+      // Get network config
+      const networkConfig = x402Service.getNetworkConfig(x402Network);
+      if (!networkConfig) {
+        throw new Error(`Network ${x402Network} is not configured`);
+      }
+
+      // Calculate FRESH price (using actual data item size once known)
+      // For now, estimate based on content-length (will be validated after caching)
+      const estimatedSize = rawContentLength || 0;
+      const txAttributes = await pricingService.getTxAttributesForDataItems([
+        { byteCount: estimatedSize as ByteCount, signatureType } as any,
+      ]);
+
+      const winstonPrice = txAttributes.reward ? parseInt(txAttributes.reward, 10) : 0;
+      const winstonWithFee = Math.ceil(winstonPrice * (1 + x402FeePercent / 100));
+      const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithFee.toString()));
+
+      // Build payment requirements
+      const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
+      const requirements = {
+        scheme: "exact" as const,
+        network: x402Network,
+        maxAmountRequired: usdcAmountRequired,
+        resource: `${uploadServicePublicUrl}/v1/tx`,
+        description: `Upload ${estimatedSize} bytes to Arweave via AR.IO Bundler`,
+        mimeType: "application/octet-stream",
+        asset: networkConfig.usdcAddress,
+        payTo: authorization.to,
+        maxTimeoutSeconds: Math.floor(x402PaymentTimeoutMs / 1000),
+        extra: {
+          name: "USD Coin",
+          version: "2",
+        },
+      };
+
+      // Verify payment
+      logger.debug("Verifying x402 payment for signed data item", {
+        dataItemId,
+        network: x402Network,
+      });
+
+      const verification = await x402Service.verifyPayment(
+        paymentHeaderValue,
+        requirements
+      );
+
+      if (!verification.isValid) {
+        await removeFromInFlight({ dataItemId, cacheService, logger });
+        logger.warn("X402 payment verification failed", {
+          dataItemId,
+          reason: verification.invalidReason,
+        });
+
+        ctx.status = 402;
+        ctx.body = {
+          error: verification.invalidReason || "Payment verification failed",
+          x402Version: 1,
+          accepts: [requirements],
+        };
+        return next();
+      }
+
+      // Settle payment
+      logger.info("Settling x402 payment for signed data item", {
+        dataItemId,
+        network: x402Network,
+      });
+
+      const settlement = await x402Service.settlePayment(
+        paymentHeaderValue,
+        requirements
+      );
+
+      if (!settlement.success) {
+        await removeFromInFlight({ dataItemId, cacheService, logger });
+        logger.error("X402 payment settlement failed", {
+          dataItemId,
+          error: settlement.error,
+        });
+
+        ctx.status = 503;
+        ctx.body = {
+          error: "Payment settlement failed",
+          details: settlement.error,
+        };
+        return next();
+      }
+
+      x402TxHash = settlement.transactionHash!;
+      x402PaymentId = `x402_${Date.now()}_${dataItemId.substring(0, 8)}`;
+
+      // Store payment record
+      const wincPaid = await x402PricingOracle.getWinstonForUSDC(authorization.value);
+      await database.createX402Payment({
+        userAddress: ownerPublicAddress,
+        userAddressType: signatureType === 1 ? "arweave" : signatureType === 3 ? "ethereum" : "solana",
+        txHash: x402TxHash,
+        network: x402Network,
+        tokenAddress: networkConfig.usdcAddress,
+        usdcAmount: authorization.value,
+        wincAmount: wincPaid,
+        mode: "payg",
+        dataItemId: dataItemId as DataItemId,
+        declaredByteCount: estimatedSize as ByteCount,
+        payerAddress: authorization.from,
+      });
+
+      logger.info("X402 payment settled and recorded", {
+        dataItemId,
+        paymentId: x402PaymentId,
+        txHash: x402TxHash,
+        network: x402Network,
+      });
+    } catch (paymentError) {
+      await removeFromInFlight({ dataItemId, cacheService, logger });
+      logger.error("X402 payment processing failed", {
+        dataItemId,
+        error: paymentError instanceof Error ? paymentError.message : String(paymentError),
+      });
+
+      ctx.status = 402;
+      ctx.body = {
+        error: "Payment processing failed",
+        details: paymentError instanceof Error ? paymentError.message : "Unknown error",
+      };
+      return next();
+    }
+  } else if (isWhitelisted) {
+    logger.info("Whitelisted wallet - proceeding without payment", {
+      ownerPublicAddress,
+      dataItemId,
+    });
+  }
 
   // Parse out the content type and the payload stream
   let payloadContentType: string;
@@ -623,6 +836,16 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
   ctx.body = {
     ...signedReceipt,
     owner: ownerPublicAddress,
+    ...(x402PaymentId && x402TxHash && x402Network
+      ? {
+          x402Payment: {
+            paymentId: x402PaymentId,
+            txHash: x402TxHash,
+            network: x402Network,
+            mode: "payg",
+          },
+        }
+      : {}),
   };
 
   await removeFromInFlight({ dataItemId, cacheService, logger });

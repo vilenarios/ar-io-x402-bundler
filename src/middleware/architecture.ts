@@ -28,6 +28,7 @@ export async function architectureMiddleware(
   ctx.state.dataItemOffsetsDB = arch.dataItemOffsetsDB;
   ctx.state.objectStore = arch.objectStore;
   ctx.state.cacheService = arch.cacheService;
+  ctx.state.pricingService = arch.pricingService;
   ctx.state.x402Service = arch.x402Service;
   ctx.state.getArweaveWallet = arch.getArweaveWallet;
   ctx.state.getRawDataItemWallet = arch.getRawDataItemWallet;

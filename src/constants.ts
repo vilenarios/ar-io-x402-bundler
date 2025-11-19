@@ -396,11 +396,11 @@ export const oneARInWinston = 1e12;
 // x402 Payment Configuration
 export const isX402Enabled = process.env.X402_ENABLED !== "false"; // Default: true
 
-export const x402PaymentModes = ["payg", "topup", "hybrid"] as const;
+// x402-only bundler: Only PAYG mode supported (no account balances)
+export const x402PaymentModes = ["payg"] as const;
 export type X402PaymentMode = (typeof x402PaymentModes)[number];
 
-export const defaultX402PaymentMode: X402PaymentMode =
-  (process.env.X402_DEFAULT_MODE as X402PaymentMode) || "hybrid";
+export const defaultX402PaymentMode: X402PaymentMode = "payg";
 
 // x402 network configurations
 export interface X402NetworkConfig {

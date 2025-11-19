@@ -61,6 +61,7 @@ export async function createServer(
   const dataItemOffsetsDB =
     arch.dataItemOffsetsDB ?? defaultArchitecture.dataItemOffsetsDB;
   const objectStore = arch.objectStore ?? defaultArchitecture.objectStore;
+  const pricingService = arch.pricingService ?? defaultArchitecture.pricingService;
   const x402Service = arch.x402Service ?? defaultArchitecture.x402Service;
   const cacheService = arch.cacheService ?? defaultArchitecture.cacheService;
 
@@ -89,6 +90,7 @@ export async function createServer(
       dataItemOffsetsDB,
       objectStore,
       cacheService,
+      pricingService,
       x402Service,
       arweaveGateway,
       getArweaveWallet,

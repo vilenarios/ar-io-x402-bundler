@@ -140,12 +140,13 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
     estimatedDataItemSize
   );
 
-  // Apply 5% buffer here (oracle will apply additional 10% for total ~15.5% to match payment-service)
-  const winstonWithBuffer = Math.ceil(Number(winstonCost) * 1.05);
+  // Apply bundler fee (profit margin on top of Arweave costs)
+  const { x402FeePercent } = await import("../constants");
+  const winstonWithFee = Math.ceil(Number(winstonCost) * (1 + x402FeePercent / 100));
 
-  // Convert Winston to USDC (oracle applies additional 10% buffer internally, using singleton for caching)
+  // Convert Winston to USDC (using singleton for caching)
   const { x402PricingOracle } = await import("../utils/x402Pricing");
-  const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithBuffer.toString()));
+  const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithFee.toString()));
 
   // Build payment requirements for verification
   const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
@@ -479,12 +480,13 @@ async function send402PaymentRequired(
     estimatedDataItemSize
   );
 
-  // Apply 5% buffer here (oracle will apply additional 10% for total ~15.5%)
-  const winstonWithBuffer = Math.ceil(Number(winstonCost) * 1.05);
+  // Apply bundler fee (profit margin on top of Arweave costs)
+  const { x402FeePercent } = await import("../constants");
+  const winstonWithFee = Math.ceil(Number(winstonCost) * (1 + x402FeePercent / 100));
 
-  // Convert Winston to USDC using the pricing oracle (oracle applies additional 10% buffer internally, using singleton for caching)
+  // Convert Winston to USDC using the pricing oracle (using singleton for caching)
   const { x402PricingOracle } = await import("../utils/x402Pricing");
-  const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithBuffer.toString()));
+  const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithFee.toString()));
 
   logger.info("Calculated x402 price quote", {
     byteCount,
@@ -493,7 +495,7 @@ async function send402PaymentRequired(
     totalTagCount,
     estimatedDataItemSize,
     winstonCost: winstonCost.toString(),
-    winstonWithBuffer,
+    winstonWithFee,
     usdcAmountRequired,
   });
 
