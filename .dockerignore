@@ -1,55 +1,54 @@
-# Node modules
-node_modules/
+# Git
+.git
+.gitignore
+.github
+
+# Node
+node_modules
 npm-debug.log
 yarn-error.log
-.pnp.*
 
-# Build output
-lib/
-dist/
-build/
+# Build artifacts
+lib
+dist
+build
 
-# Environment files
-.env
-.env.*
-!.env.sample
+# Testing
+coverage
+.nyc_output
+tests/__snapshots__
 
-# IDE files
-.vscode/
-.idea/
+# IDE
+.vscode
+.idea
 *.swp
 *.swo
 *~
 
-# OS files
+# OS
 .DS_Store
 Thumbs.db
 
-# Git files
-.git/
-.gitignore
+# Environment
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+rawWallet.json
 
-# Documentation
-*.md
-!README.md
+# Docker
+docker-compose*.yml
 
-# Test files
-tests/
-*.test.ts
-*.spec.ts
-coverage/
+# Documentation (not needed in image)
+docs/*.md
+LICENSE
 
 # Logs
-logs/
+logs
 *.log
-pm2.log
 
-# Temporary files
-tmp/
-temp/
-*.tmp
-
-# Docker files
-Dockerfile*
-docker-compose*.yml
-.dockerignore
+# Misc
+.editorconfig
+.prettierrc
+.eslintrc*

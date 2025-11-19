@@ -1,0 +1,152 @@
+version: '3.8'
+
+# Production deployment using pre-built image from GitHub Container Registry
+# Usage: docker-compose -f docker-compose.production.yml up -d
+
+services:
+  bundler-api:
+    image: ghcr.io/vilenarios/ar-io-x402-bundler:latest
+    container_name: ar-io-bundler-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - MIGRATE_ON_STARTUP=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis-cache:
+        condition: service_healthy
+      redis-queue:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: ["node", "lib/server.js"]
+    networks:
+      - bundler-network
+    volumes:
+      - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
+      - ${RAW_DATA_ITEM_WALLET_FILE:-/dev/null}:${RAW_DATA_ITEM_WALLET_FILE:-/dev/null}:ro
+
+  bundler-workers:
+    image: ghcr.io/vilenarios/ar-io-x402-bundler:latest
+    container_name: ar-io-bundler-workers
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - bundler-api
+      - postgres
+      - redis-queue
+      - minio
+    command: ["node", "lib/jobs/allWorkers.js"]
+    networks:
+      - bundler-network
+    volumes:
+      - ${ARWEAVE_WALLET_FILE}:${ARWEAVE_WALLET_FILE}:ro
+      - ${RAW_DATA_ITEM_WALLET_FILE:-/dev/null}:${RAW_DATA_ITEM_WALLET_FILE:-/dev/null}:ro
+    deploy:
+      replicas: 1
+
+  admin-dashboard:
+    image: ghcr.io/vilenarios/ar-io-x402-bundler:latest
+    container_name: ar-io-bundler-admin
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+    depends_on:
+      - redis-queue
+    command: ["node", "admin-server.js"]
+    networks:
+      - bundler-network
+
+  # Infrastructure services (same as docker-compose.yml)
+  postgres:
+    image: postgres:16-alpine
+    container_name: ar-io-bundler-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_DATABASE:-bundler_lite}
+      POSTGRES_USER: ${DB_USER:-bundler_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-bundler_password}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-bundler_user} -d ${DB_DATABASE:-bundler_lite}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bundler-network
+
+  redis-cache:
+    image: redis:7-alpine
+    container_name: ar-io-bundler-redis-cache
+    restart: unless-stopped
+    ports:
+      - "${ELASTICACHE_PORT:-6379}:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bundler-network
+
+  redis-queue:
+    image: redis:7-alpine
+    container_name: ar-io-bundler-redis-queue
+    restart: unless-stopped
+    ports:
+      - "${REDIS_PORT_QUEUES:-6381}:6379"
+    command: redis-server --maxmemory 512mb --maxmemory-policy noeviction
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bundler-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: ar-io-bundler-minio
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bundler-network
+
+volumes:
+  postgres-data:
+    driver: local
+  minio-data:
+    driver: local
+
+networks:
+  bundler-network:
+    driver: bridge

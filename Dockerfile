@@ -58,6 +58,8 @@ COPY --chown=bundler:bundler package.json yarn.lock ./
 COPY --chown=bundler:bundler --from=builder /app/lib ./lib
 COPY --chown=bundler:bundler --from=builder /app/node_modules ./node_modules
 COPY --chown=bundler:bundler .env.sample ./
+COPY --chown=bundler:bundler admin-server.js ./
+COPY --chown=bundler:bundler ecosystem.config.js ./
 
 # Switch to non-root user
 USER bundler
