@@ -16,15 +16,14 @@ VERSION=${1:-latest}
 GITHUB_USER="vilenarios"
 IMAGE_NAME="ar-io-x402-bundler"
 
-# Check if logged in to GHCR
-if ! docker info 2>/dev/null | grep -q "ghcr.io"; then
-  echo "⚠️  Not logged in to ghcr.io"
-  echo "Please login first:"
+# Check if logged in to GHCR by checking Docker config
+CONFIG_FILE="${HOME}/.docker/config.json"
+if [ ! -f "$CONFIG_FILE" ] || ! grep -q "ghcr.io" "$CONFIG_FILE" 2>/dev/null; then
+  echo "⚠️  Warning: May not be logged in to ghcr.io"
+  echo "If push fails, login first with:"
   echo "  echo \$GITHUB_TOKEN | docker login ghcr.io -u vilenarios --password-stdin"
   echo ""
-  echo "Need to use sudo? Try:"
-  echo "  echo \$GITHUB_TOKEN | sudo docker login ghcr.io -u vilenarios --password-stdin"
-  exit 1
+  echo "Continuing anyway..."
 fi
 
 echo "Building Docker image..."
