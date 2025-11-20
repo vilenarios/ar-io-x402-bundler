@@ -6,15 +6,15 @@ Perfect for **AI agents**, **CLI tools**, **stateless clients**, and **developer
 
 ## 🌟 Features
 
-- **✅ x402 USDC Payments** - Pay with USDC using Coinbase's x402 HTTP 402 standard (EIP-3009)
-- **✅ Stateless Operation** - No account creation required for x402 payments
+- **✅ x402 USDC Payments** - Pay with USDC using Coinbase's x402 protocol (EIP-3009)
+- **✅ Multi-Facilitator Fallback** - Automatic failover between payment facilitators
+- **✅ Stateless Operation** - No account creation required
 - **✅ ANS-104 Bundling** - Efficient data item bundling for Arweave
 - **✅ Multi-Signature Support** - Arweave, Ethereum, Solana wallets
 - **✅ Fraud Detection** - Automatic byte-count verification with ±5% tolerance
+- **✅ Auto Storage Cleanup** - Tiered retention (filesystem → MinIO → Arweave)
 - **✅ Job Queue System** - BullMQ-powered async bundling pipeline
 - **✅ S3-Compatible Storage** - MinIO or AWS S3 for data item storage
-- **✅ PostgreSQL Database** - Reliable payment and bundle tracking
-- **✅ Docker Support** - Complete infrastructure in docker-compose
 - **✅ Production Ready** - Built on AR.IO's battle-tested bundler architecture
 
 ---
@@ -27,141 +27,127 @@ Perfect for **AI agents**, **CLI tools**, **stateless clients**, and **developer
 - **Arweave Wallet** (JWK file for bundle signing)
 - **EVM Address** (for receiving USDC payments)
 
-*Alternative: Node.js >= 18.0.0 + Yarn >= 1.22.0 for PM2 deployment*
+### Option 1: Interactive Setup (Easiest)
 
-### Option 1: All-Docker (Simplest - Recommended)
-
-**Interactive Setup (Easiest):**
-
-\`\`\`bash
+```bash
 ./setup-bundler.sh
-# Follow the interactive prompts - it will guide you through everything!
-\`\`\`
+```
 
-**Manual Setup:**
+The script will guide you through wallet configuration, payment setup, and network selection.
 
-\`\`\`bash
+### Option 2: Manual Setup
+
+```bash
 # 1. Configure
 cp .env.sample .env
 # Edit .env: set ARWEAVE_WALLET_FILE and X402_PAYMENT_ADDRESS
 
 # 2. Start everything
 ./start-bundler.sh
-\`\`\`
+```
 
-**What you get:**
+**Services:**
 - Bundler API: http://localhost:3001
 - Admin Dashboard: http://localhost:3002/admin/dashboard
 - Queue Monitor: http://localhost:3002/admin/queues
 - MinIO Console: http://localhost:9001
 
 **Stop everything:**
-\`\`\`bash
+```bash
 ./stop-bundler.sh              # Stop (keep data)
 ./stop-bundler.sh --clean      # Stop and delete all data
-\`\`\`
+```
 
-📖 **Full Docker guide:** [DOCKER_DEPLOYMENT.md](./docs/DOCKER_DEPLOYMENT.md)
+### Option 3: PM2 Deployment (Development)
 
-### Option 2: CLI with Flags
+For development or debugging:
 
-Use the `quick-start.sh` script with command-line arguments:
-
-\`\`\`bash
-# TESTNET (Base Sepolia - no CDP credentials required)
-./scripts/quick-start.sh --wallet ./path/to/wallet.json --x402-address 0xYourEthereumAddress
-
-# MAINNET (requires Coinbase CDP credentials)
-./scripts/quick-start.sh --wallet ./wallet.json --x402-address 0xYourAddress --network mainnet
-\`\`\`
-
-### Option 3: PM2 Deployment
-
-For development or if you need Node.js debugging:
-
-\`\`\`bash
-# 1. Install dependencies
+```bash
 yarn install
-
-# 2. Configure
 cp .env.sample .env
 # Edit .env with your settings
 
-# 3. Start infrastructure (Docker)
-yarn docker:up
-
-# 4. Build and migrate
+yarn docker:up       # Start infrastructure
 yarn build
 yarn db:migrate
 
-# 5. Start with PM2
 pm2 start ecosystem.config.js
-
-# View logs
 pm2 logs
-\`\`\`
+```
 
-📖 **Deployment comparison:** [DEPLOYMENT_OPTIONS.md](./docs/DEPLOYMENT_OPTIONS.md)
-
-**Useful Commands:**
-\`\`\`bash
-pm2 stop all              # Stop services
-pm2 restart all           # Restart services
-pm2 logs upload-api       # View API logs
-pm2 logs upload-workers   # View worker logs
-docker-compose down       # Stop infrastructure
-\`\`\`
+**📖 Full deployment guide:** [ADMIN.md](./ADMIN.md)
 
 ---
 
-## 📚 Documentation
+## ⚙️ Configuration
 
-- **[DOCKER_DEPLOYMENT.md](./docs/DOCKER_DEPLOYMENT.md)** - Complete Docker deployment guide
-- **[DEPLOYMENT_OPTIONS.md](./docs/DEPLOYMENT_OPTIONS.md)** - Compare deployment methods
-- **[X402_TWO_STAGE_PAYMENT.md](./docs/X402_TWO_STAGE_PAYMENT.md)** - x402 payment flow details
-- **[CLAUDE.md](./docs/CLAUDE.md)** - Architecture for AI assistants
+### Critical Environment Variables
 
----
+Edit `.env` with these required settings:
 
-## 📦 Docker Commands
+```bash
+# REQUIRED: Arweave wallet for signing bundles
+# MUST be absolute path (not relative)
+ARWEAVE_WALLET_FILE=/absolute/path/to/wallet.json
 
-If using Docker deployment:
+# REQUIRED: Your Ethereum address to receive USDC payments
+X402_PAYMENT_ADDRESS=0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb1
 
-\`\`\`bash
-# Start all services
-docker-compose up -d
+# REQUIRED FOR PRODUCTION: Public URL of your bundler
+# Payment flows require this to generate correct payment requests
+UPLOAD_SERVICE_PUBLIC_URL=https://upload.yourdomain.com
 
-# Stop all services
-docker-compose down
+# OPTIONAL: Coinbase CDP credentials (required for Base mainnet only)
+# Get from: https://portal.cdp.coinbase.com/
+# Testnet (Base Sepolia) works without CDP credentials
+CDP_API_KEY_ID=your-cdp-key-id
+CDP_API_KEY_SECRET=your-cdp-secret
 
-# Stop and remove all data (clean slate)
-docker-compose down -v
+# REQUIRED: Admin dashboard password
+# Generate with: openssl rand -hex 32
+ADMIN_PASSWORD=your-secure-password-here
+```
 
-# View logs for specific service
-docker-compose logs -f bundler
-docker-compose logs -f admin
+### Multi-Facilitator Configuration
 
-# Rebuild after code changes
-docker-compose up -d --build
+The bundler supports automatic fallback between multiple payment facilitators:
 
-# Access bundler container shell
-docker-compose exec bundler sh
-\`\`\`
+```bash
+# Base mainnet facilitators (tries in order)
+# Default: Coinbase (primary) → Mogami (fallback)
+X402_FACILITATORS_BASE=https://api.cdp.coinbase.com/platform/v2/x402,https://facilitator.mogami.tech
 
-**What Docker runs:**
-- ✅ PostgreSQL (database)
-- ✅ Redis (cache + queues)
-- ✅ MinIO (S3 storage)
-- ✅ Bundler Service (main API)
-- ✅ Admin Dashboard (monitoring)
+# Base Sepolia testnet facilitators
+# Default: Mogami (no CDP credentials required)
+X402_FACILITATORS_BASE_TESTNET=https://facilitator.mogami.tech
+```
 
-**Advantages of Docker setup:**
-- Single command to start everything
-- No local Node.js/Yarn installation needed (except for development)
-- Consistent environment across dev/staging/prod
-- Easy scaling and deployment
-- Automatic health checks and restarts
-- Isolated network and volumes
+**Network Defaults:**
+- **Base Mainnet** - Enabled by default
+- **Base Sepolia (testnet)** - Disabled by default (enable with `X402_BASE_TESTNET_ENABLED=true`)
+- **Ethereum/Polygon** - Disabled (must configure facilitators to enable)
+
+### Storage Cleanup Configuration
+
+The bundler uses tiered storage with automatic cleanup:
+
+```bash
+# Filesystem cleanup (hot cache for bundling)
+FILESYSTEM_CLEANUP_DAYS=7       # Keep for 7 days
+
+# MinIO cleanup (cold storage for disaster recovery)
+MINIO_CLEANUP_DAYS=90           # Keep for 90 days
+
+# Cleanup schedule (cron format)
+CLEANUP_CRON=0 2 * * *          # Daily at 2 AM UTC
+```
+
+**Storage Tiers:**
+1. **Filesystem** (7 days) - Fast bundling cache
+2. **MinIO** (90 days) - Disaster recovery & re-bundling
+3. **Arweave** (permanent) - Immutable decentralized storage
+
+**📖 Storage management guide:** [ADMIN.md#storage-management](./ADMIN.md#storage-management)
 
 ---
 
@@ -169,9 +155,9 @@ docker-compose exec bundler sh
 
 ### How It Works
 
-The x402 protocol enables stateless, pay-per-upload payments without account creation:
+The x402 protocol enables stateless, pay-per-upload payments:
 
-\`\`\`
+```
 ┌─────────┐                    ┌──────────────┐                    ┌─────────┐
 │ Client  │                    │   Bundler    │                    │  USDC   │
 │         │                    │   (Lite)     │                    │ Contract│
@@ -187,54 +173,39 @@ The x402 protocol enables stateless, pay-per-upload payments without account cre
      │<───────────────────────────────┤                                  │
      │                                │                                  │
      │ 3. Create EIP-712 signature    │                                  │
-     │    for USDC transfer          │                                  │
      │                                │                                  │
      │ 4. POST /v1/tx                 │                                  │
-     │   X-PAYMENT: <base64-payload>  │                                  │
-     │   Content-Length: <bytes>      │                                  │
+     │   X-PAYMENT: <signature>       │                                  │
      ├───────────────────────────────>│                                  │
-     │                                │                                  │
-     │                                │ 5. Verify signature              │
-     │                                │    Settle USDC transfer          │
+     │                                │ 5. Verify & settle payment       │
      │                                ├─────────────────────────────────>│
      │                                │<─────────────────────────────────┤
-     │                                │  Transaction confirmed           │
      │                                │                                  │
-     │ 6. 200 OK                      │                                  │
-     │   X-Payment-Response:          │                                  │
-     │   {txHash, paymentId, receipt} │                                  │
+     │ 6. 200 OK with receipt         │                                  │
      │<───────────────────────────────┤                                  │
-     │                                │                                  │
-     │ 7. (After upload verification) │                                  │
-     │                                │ 8. Fraud detection               │
-     │                                │    ±5% byte count tolerance      │
-     │                                │                                  │
-\`\`\`
+```
 
 ### Example: Upload with x402
 
 #### Step 1: Get Price Quote
 
-\`\`\`bash
+```bash
 curl -X GET "http://localhost:3001/v1/x402/price/3/0xYourAddress?bytes=1024"
-\`\`\`
+```
 
-**Response: 200 OK** (per x402 spec, price quotes return 200, not 402)
+**Response: 200 OK**
 
-\`\`\`json
+```json
 {
   "x402Version": 1,
   "accepts": [
     {
       "scheme": "exact",
-      "network": "base-sepolia",
+      "network": "base",
       "maxAmountRequired": "150000",
       "resource": "/v1/tx",
-      "description": "Upload data to Arweave via AR.IO Bundler",
-      "mimeType": "application/json",
       "payTo": "0xYourPaymentAddress",
-      "maxTimeoutSeconds": 300,
-      "asset": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+      "asset": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
       "extra": {
         "name": "USD Coin",
         "version": "2"
@@ -242,19 +213,19 @@ curl -X GET "http://localhost:3001/v1/x402/price/3/0xYourAddress?bytes=1024"
     }
   ]
 }
-\`\`\`
+```
 
-#### Step 2: Create EIP-712 Signature (in your application)
+#### Step 2: Create EIP-712 Signature
 
-\`\`\`typescript
+```typescript
 import { ethers } from 'ethers';
 
 // EIP-712 domain for USDC contract
 const domain = {
   name: "USD Coin",
   version: "2",
-  chainId: 84532, // Base Sepolia
-  verifyingContract: "0x036CbD53842c5426634e7929541eC2318f3dCF7e"
+  chainId: 8453,  // Base Mainnet
+  verifyingContract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 };
 
 // EIP-712 types for transferWithAuthorization
@@ -273,9 +244,9 @@ const types = {
 const authorization = {
   from: "0xYourAddress",
   to: "0xPaymentAddress",
-  value: "150000", // USDC atomic units (6 decimals)
+  value: "150000",  // USDC atomic units (6 decimals)
   validAfter: 0,
-  validBefore: Math.floor(Date.now() / 1000) + 300, // 5 min from now
+  validBefore: Math.floor(Date.now() / 1000) + 3600,  // 1 hour
   nonce: ethers.hexlify(ethers.randomBytes(32))
 };
 
@@ -287,29 +258,26 @@ const signature = await signer.signTypedData(domain, types, authorization);
 const paymentPayload = {
   x402Version: 1,
   scheme: "exact",
-  network: "base-sepolia",
-  payload: {
-    signature,
-    authorization
-  }
+  network: "base",
+  payload: { signature, authorization }
 };
 
 const paymentHeader = Buffer.from(JSON.stringify(paymentPayload)).toString('base64');
-\`\`\`
+```
 
 #### Step 3: Upload with Payment
 
-\`\`\`bash
-curl -X POST "http://localhost:3001/v1/tx" \\
-  -H "Content-Type: application/octet-stream" \\
-  -H "X-PAYMENT: <base64-payment-payload>" \\
-  -H "Content-Length: 1024" \\
+```bash
+curl -X POST "http://localhost:3001/v1/tx" \
+  -H "Content-Type: application/octet-stream" \
+  -H "X-PAYMENT: <base64-payment-payload>" \
+  -H "Content-Length: 1024" \
   --data-binary @mydata.bin
-\`\`\`
+```
 
 **Response: 200 OK**
 
-\`\`\`json
+```json
 {
   "id": "dataItemId123...",
   "timestamp": 1699123456789,
@@ -320,187 +288,103 @@ curl -X POST "http://localhost:3001/v1/tx" \\
   "x402Payment": {
     "paymentId": "x402_1699123456_abc123",
     "txHash": "0x789...",
-    "network": "base-sepolia",
+    "network": "base",
     "mode": "payg"
   }
 }
-\`\`\`
+```
 
 ---
 
-## ⚙️ Configuration
+## 📚 API Reference
 
-### Required Environment Variables
+### Core Upload Endpoints
 
-Edit \`.env\` with these critical settings:
+#### Upload Data Item
 
-\`\`\`bash
-# Server Configuration
-PORT=3001
-NODE_ENV=production
+```http
+POST /v1/tx
+Content-Type: application/octet-stream
+X-PAYMENT: <optional-x402-payment-header>
+Content-Length: <bytes>
 
-# Database (PostgreSQL)
-DB_HOST=localhost
-DB_PORT=5432
-DB_NAME=bundler_lite
-DB_USER=bundler
-DB_PASSWORD=your-secure-password
+<binary ANS-104 data item>
+```
 
-# Redis (Cache)
-REDIS_CACHE_HOST=localhost
-REDIS_CACHE_PORT=6379
+**Without X-PAYMENT**: Returns 402 Payment Required with payment requirements
+**With X-PAYMENT**: Returns 200 OK with receipt and payment confirmation
 
-# Redis (Queue)
-REDIS_QUEUE_HOST=localhost
-REDIS_QUEUE_PORT=6381
+#### Get Data Item Status
 
-# Object Storage (MinIO or S3)
-AWS_ENDPOINT=http://localhost:9000
-AWS_ACCESS_KEY_ID=minioadmin
-AWS_SECRET_ACCESS_KEY=minioadmin
-AWS_REGION=us-east-1
-OBJECT_STORE_TYPE=s3
+```http
+GET /v1/tx/{dataItemId}/status
+```
 
-# Arweave Configuration
-ARWEAVE_GATEWAY=https://arweave.net
-TURBO_JWK_FILE=/absolute/path/to/your/arweave-wallet.json
+**Response:**
+```json
+{
+  "id": "dataItemId123",
+  "status": "permanent",
+  "bundleId": "bundleTxId456",
+  "blockHeight": 1234567
+}
+```
 
-# x402 Payment Configuration
-X402_PAYMENT_ADDRESS=0xYourEthereumAddress
-X402_BASE_TESTNET_ENABLED=true
-X402_BASE_ENABLED=false  # Set to true for mainnet
-X402_FACILITATOR_URL_BASE_TESTNET=https://x402.org/facilitator
-X402_FRAUD_TOLERANCE_PERCENT=5
-X402_FEE_PERCENT=30
+**Statuses:**
+- `new` - Uploaded, awaiting bundling
+- `pending` - In bundling pipeline
+- `finalized` - Bundle posted, awaiting confirmation
+- `permanent` - Confirmed on Arweave
 
-# Coinbase CDP (Required for mainnet, optional for testnet)
-CDP_API_KEY_ID=your-cdp-key-id
-CDP_API_KEY_SECRET=your-cdp-secret
-\`\`\`
+### x402 Payment Endpoints
 
-### Network Configuration
+#### Get Price Quote
 
-**Testnet (Base Sepolia) - Default**
-\`\`\`bash
-X402_BASE_TESTNET_ENABLED=true
-BASE_SEPOLIA_RPC_URL=https://sepolia.base.org
-X402_FACILITATOR_URL_BASE_TESTNET=https://x402.org/facilitator
-\`\`\`
+```http
+GET /v1/x402/price/{signatureType}/{address}?bytes={byteCount}
+```
 
-**Mainnet (Base) - Production**
-\`\`\`bash
-X402_BASE_ENABLED=true
-BASE_MAINNET_RPC_URL=https://mainnet.base.org
-X402_FACILITATOR_URL_BASE=https://facilitator.base.coinbasecloud.net
-CDP_API_KEY_ID=required-for-mainnet
-CDP_API_KEY_SECRET=required-for-mainnet
-\`\`\`
+**Parameters:**
+- `signatureType`: `1` (Arweave), `3` (Ethereum), `4` (Solana)
+- `address`: Wallet address
+- `bytes`: Data size in bytes (query parameter)
 
-### Important Notes
+**Response**: 200 OK with x402 payment requirements
 
-- **TURBO_JWK_FILE**: MUST be an absolute path (not relative)
-- **X402_PAYMENT_ADDRESS**: Your Ethereum address that will receive USDC payments
-- **CDP Credentials**: Get from [Coinbase Developer Platform](https://portal.cdp.coinbase.com/)
-- **Testnet Facilitator**: Public facilitator (https://x402.org/facilitator) works without CDP credentials
-- **Mainnet Facilitator**: Requires CDP API credentials
+### Service Info Endpoints
+
+- **Service Info**: `GET /v1/info`
+- **Health Check**: `GET /health`
+- **Prometheus Metrics**: `GET /bundler_metrics`
 
 ---
 
-## 🗄️ Database Setup
+## 📊 Admin Dashboard
 
-The bundler uses PostgreSQL with Knex migrations:
+Access the admin dashboard at: http://localhost:3002/admin/dashboard
 
-\`\`\`bash
-# Run all migrations
-yarn db:migrate
+**Features:**
+- Real-time upload statistics
+- x402 payment metrics by network
+- Bundle posting statistics
+- System health indicators
+- BullMQ job queue monitoring
 
-# Rollback last migration
-yarn db:migrate:rollback
+**Authentication**: Basic Auth using `ADMIN_USERNAME` and `ADMIN_PASSWORD` from `.env`
 
-# Create new migration
-yarn db:migrate:new migration_name
-\`\`\`
+**Queue Monitor**: http://localhost:3002/admin/queues
+- View all 11 job queues
+- Monitor job status (waiting, active, completed, failed)
+- Retry failed jobs manually
+- Inspect job details and errors
 
-### Key Tables
-
-- \`new_data_item\` - Uploaded data items awaiting bundling
-- \`planned_data_item\` - Data items queued for bundling
-- \`permanent_data_item\` - Successfully bundled and permanent items
-- \`bundle_plan\` - Bundle planning records
-- \`posted_bundle\` - Posted bundles to Arweave
-- \`x402_payments\` - x402 payment transactions and fraud detection
-
----
-
-## 📦 Docker Infrastructure
-
-The \`docker-compose.yml\` provides complete infrastructure:
-
-\`\`\`yaml
-services:
-  postgres:       # Port 5432 - PostgreSQL database
-  redis-cache:    # Port 6379 - Caching layer
-  redis-queue:    # Port 6381 - BullMQ job queues
-  minio:          # Port 9000 - S3-compatible storage
-  minio-init:     # Initializes S3 buckets (raw-data-items, backup-data-items)
-\`\`\`
-
-### Commands
-
-\`\`\`bash
-# Start all infrastructure services
-yarn docker:up
-
-# Stop all services
-yarn docker:down
-
-# View logs
-docker-compose logs -f postgres
-docker-compose logs -f redis-cache
-
-# Access MinIO web console
-open http://localhost:9001
-# Login: minioadmin / minioadmin
-\`\`\`
-
----
-
-## 🔄 Job Pipeline
-
-The bundler uses BullMQ for async processing with 11 job queues:
-
-\`\`\`
-Upload → newDataItem → planBundle → prepareBundle → postBundle → verifyBundle
-              ↓              ↓
-        opticalPost    unbundleBdi
-              ↓              ↓
-         putOffsets     cleanupFs
-\`\`\`
-
-### Job Queues & Workers
-
-1. **new-data-item** - Process new uploads and store in object storage
-2. **plan-bundle** - Group data items into bundles (size/feature-based)
-3. **prepare-bundle** - Download items and assemble ANS-104 bundles
-4. **post-bundle** - Post assembled bundles to Arweave network
-5. **verify-bundle** - Confirm bundle posting and update database
-6. **optical-post** - Optional AR.IO Gateway optimistic caching
-7. **unbundle-bdi** - Extract nested bundle data items (BDIs)
-8. **cleanup-fs** - Remove temporary filesystem artifacts
-9. **put-offsets** - Write data item offset information
-10. **finalize-upload** - Complete multipart upload flow
-
-### Monitoring
-
-- BullMQ provides job status, retry logic, and failure handling
-- Failed jobs are automatically retried with exponential backoff
-- Job metrics available via Prometheus endpoint (if enabled)
+**📖 Monitoring guide:** [ADMIN.md#monitoring](./ADMIN.md#monitoring)
 
 ---
 
 ## 🧪 Testing
 
-\`\`\`bash
+```bash
 # Unit tests only
 yarn test:unit
 
@@ -520,13 +404,13 @@ yarn lint:fix
 # Code formatting
 yarn format
 yarn format:check
-\`\`\`
+```
 
 ---
 
 ## 🔧 Development
 
-\`\`\`bash
+```bash
 # Development mode with hot reload
 yarn dev
 
@@ -538,255 +422,175 @@ yarn build
 
 # Clean build artifacts
 yarn clean
-\`\`\`
+```
+
+### Database Operations
+
+```bash
+# Run all migrations
+yarn db:migrate
+
+# Rollback last migration
+yarn db:migrate:rollback
+
+# Create new migration
+yarn db:migrate:new migration_name
+```
+
+**Important**: Migration files are created in `src/migrations/*.ts` and compiled to `lib/migrations/*.js`.
 
 ---
 
-## 📊 Admin Dashboard
+## 🌐 Networks & Standards
 
-The bundler includes a comprehensive admin dashboard for monitoring and managing your service.
+### x402 Payment Networks
 
-### Features
+- **Base Mainnet** (chainId: 8453) ⭐ **Default**
+  - USDC: `0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913`
+  - Facilitators: Coinbase (primary) → Mogami (fallback)
+  - Requires: CDP credentials
 
-- **📈 Real-time Statistics**
-  - Upload metrics (total uploads, bytes, unique users)
-  - x402 payment stats (USDC volume, transactions by network)
-  - Bundle statistics (bundles posted, average size)
-  - System health (database, Redis, queues)
+- **Base Sepolia Testnet** (chainId: 84532)
+  - USDC: `0x036CbD53842c5426634e7929541eC2318f3dCF7e`
+  - Facilitator: Mogami (no CDP needed)
 
-- **🔍 Queue Monitoring (Bull Board)**
-  - View all 11 job queues in real-time
-  - Monitor job status (waiting, active, completed, failed)
-  - Inspect individual jobs and error details
-  - Retry failed jobs manually
+- **Ethereum Mainnet** (chainId: 1)
+  - USDC: `0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48`
+  - Must configure facilitators to enable
 
-- **🔒 Secure Access**
-  - Basic Authentication (ADMIN_USERNAME/ADMIN_PASSWORD)
-  - Rate limiting to prevent abuse
-  - IP logging for audit trail
+- **Polygon Mainnet** (chainId: 137)
+  - USDC: `0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359`
+  - Must configure facilitators to enable
 
-### Starting the Dashboard
+### Data Item Signatures (ANS-104)
 
-\`\`\`bash
-# Start admin dashboard (runs on port 3002)
-yarn admin
+- **Arweave** (`signatureType: 1`) - RSA-PSS 4096-bit keys
+- **Ethereum** (`signatureType: 3`) - ECDSA secp256k1
+- **Solana** (`signatureType: 4`) - Ed25519
 
-# Or with PM2
-pm2 start admin-server.js --name admin-dashboard
-\`\`\`
+### Standards & Protocols
 
-### Accessing the Dashboard
-
-- **Dashboard**: `http://localhost:3002/admin/dashboard`
-- **Queue Monitor**: `http://localhost:3002/admin/queues`
-- **Stats API**: `http://localhost:3002/admin/stats` (JSON)
-
-### Authentication
-
-Set credentials in `.env`:
-
-\`\`\`bash
-# Generate secure password
-ADMIN_PASSWORD=$(openssl rand -hex 32)
-
-# Add to .env
-ADMIN_USERNAME=admin
-ADMIN_PASSWORD=your-generated-password-here
-BULL_BOARD_PORT=3002
-\`\`\`
-
-Browser will prompt for username/password (Basic Auth).
-
-### Dashboard Features
-
-**Main Dashboard** (`/admin/dashboard`):
-- Upload statistics (all-time, today, this week)
-- x402 payment breakdown by network
-- Top payers and recent transactions
-- System health indicators
-- 30-second auto-refresh with caching
-
-**Queue Monitor** (`/admin/queues`):
-- Real-time job queue monitoring
-- Search and filter jobs
-- Manual job retry/cleanup
-- Job logs and error details
-- Pause/resume queues
-
-### API Endpoint
-
-The stats API provides programmatic access to dashboard data:
-
-\`\`\`bash
-curl -u admin:your-password http://localhost:3002/admin/stats | jq
-\`\`\`
-
-Response includes:
-- `upload` - Upload statistics
-- `x402` - Payment statistics
-- `bundles` - Bundle statistics
-- `system` - Health metrics
-- `queues` - Queue status
+- **ANS-104**: Arweave Bundled Data Item standard
+- **x402**: Coinbase HTTP 402 Payment Required protocol
+- **EIP-712**: Typed Structured Data Hashing and Signing
+- **EIP-3009**: USDC TransferWithAuthorization (gasless transfers)
 
 ---
 
-## 📚 API Reference
+## 🐛 Troubleshooting
 
-### Core Upload Endpoints
+### Build Errors
 
-#### Upload Data Item
+**Issue**: `Cannot find module '@dha-team/arbundles'`
 
-\`\`\`http
-POST /v1/tx
-Content-Type: application/octet-stream
-X-PAYMENT: <optional-x402-payment-header>
-Content-Length: <bytes>
+```bash
+rm -rf node_modules yarn.lock
+yarn install
+```
 
-<binary ANS-104 data item>
-\`\`\`
+**Issue**: `error TS2307: Cannot find module`
 
-**Without X-PAYMENT header**: Returns 402 Payment Required with x402 payment requirements
+```bash
+yarn clean && yarn build
+```
 
-**With X-PAYMENT header**: Returns 200 OK with receipt and payment confirmation
+### Database Errors
 
-**Response (without payment)**:
-\`\`\`http
-HTTP/1.1 402 Payment Required
-X-Payment-Required: x402-1
-Content-Type: application/json
+**Issue**: `relation "new_data_item" does not exist`
 
-{
-  "x402Version": 1,
-  "accepts": [...]
-}
-\`\`\`
+```bash
+# Ensure PostgreSQL is running
+docker-compose up -d postgres
 
-**Response (with payment)**:
-\`\`\`json
-{
-  "id": "dataItemId123",
-  "timestamp": 1699123456789,
-  "owner": "0xYourAddress",
-  "signature": "...",
-  "deadlineHeight": 1234567,
-  "version": "1.0.0",
-  "x402Payment": {
-    "paymentId": "x402_...",
-    "txHash": "0x...",
-    "network": "base-sepolia",
-    "mode": "payg"
-  }
-}
-\`\`\`
+# Run migrations
+yarn db:migrate
+```
 
-#### Get Data Item Status
+**Issue**: `database "bundler_lite" does not exist`
 
-\`\`\`http
-GET /v1/tx/{dataItemId}/status
-\`\`\`
+```bash
+docker-compose exec postgres psql -U postgres -c "CREATE DATABASE bundler_lite;"
+yarn db:migrate
+```
 
-**Response**:
-\`\`\`json
-{
-  "id": "dataItemId123",
-  "status": "permanent",
-  "bundleId": "bundleTxId456",
-  "blockHeight": 1234567
-}
-\`\`\`
+### x402 Payment Errors
 
-Statuses:
-- \`new\` - Uploaded, awaiting bundling
-- \`pending\` - In bundling pipeline
-- \`finalized\` - Bundle posted, awaiting confirmation
-- \`permanent\` - Confirmed on Arweave blockchain
+**Issue**: `Invalid EIP-712 signature`
 
-#### Get Data Item Offsets
+**Solution**: Verify domain parameters match exactly:
 
-\`\`\`http
-GET /v1/tx/{dataItemId}/offsets
-\`\`\`
+```javascript
+const domain = {
+  name: "USD Coin",               // MUST match
+  version: "2",                   // MUST match
+  chainId: 8453,                  // MUST match network
+  verifyingContract: "0x833..."   // MUST match USDC contract
+};
+```
 
-**Response**:
-\`\`\`json
-{
-  "dataItemId": "dataItemId123",
-  "bundleId": "bundleTxId456",
-  "offset": 1024,
-  "size": 2048
-}
-\`\`\`
+**Issue**: `Facilitator verification failed`
 
-### x402 Payment Endpoints
+**Solution**: Check facilitator configuration and CDP credentials
 
-#### Get Price Quote
+```bash
+# For Base Mainnet (requires CDP)
+CDP_API_KEY_ID=your-key-id
+CDP_API_KEY_SECRET=your-secret
 
-\`\`\`http
-GET /v1/x402/price/{signatureType}/{address}?bytes={byteCount}
-\`\`\`
+# For Base Sepolia Testnet (no CDP needed)
+X402_BASE_TESTNET_ENABLED=true
+X402_FACILITATORS_BASE_TESTNET=https://facilitator.mogami.tech
+```
 
-**Parameters**:
-- \`signatureType\`: \`1\` (Arweave), \`3\` (Ethereum), \`4\` (Solana)
-- \`address\`: Wallet address (Arweave/Ethereum/Solana format)
-- \`bytes\`: Data size in bytes (query parameter)
+**Issue**: `Fraud penalty - byte count mismatch`
 
-**Response**: 200 OK with x402 payment requirements
+**Solution**: Ensure Content-Length matches actual data size (±5% tolerance)
 
-#### Verify and Settle Payment (Advanced)
+```bash
+curl -X POST "http://localhost:3001/v1/tx" \
+  -H "Content-Length: $(wc -c < myfile.bin)" \
+  --data-binary @myfile.bin
+```
 
-\`\`\`http
-POST /v1/x402/payment/{signatureType}/{address}
-Content-Type: application/json
+### Wallet Errors
 
-{
-  "paymentHeader": "<base64-payment-payload>",
-  "dataItemId": "optional-existing-id",
-  "byteCount": 1024,
-  "mode": "payg"
-}
-\`\`\`
+**Issue**: `ENOENT: no such file or directory, open './wallet.json'`
 
-**Payment Modes**:
-- \`payg\` - Pay-as-you-go (pay only for this upload)
-- \`topup\` - Credit account balance (requires account)
-- \`hybrid\` - Pay for upload + excess tops up balance (default)
+**Solution**: Use absolute path for Arweave wallet
 
-#### Finalize Payment (Advanced)
+```bash
+# ❌ WRONG (relative path)
+ARWEAVE_WALLET_FILE=./wallet.json
 
-\`\`\`http
-POST /v1/x402/finalize
-Content-Type: application/json
+# ✅ CORRECT (absolute path)
+ARWEAVE_WALLET_FILE=/home/user/ar-io-x402-bundler/wallet.json
+```
 
-{
-  "dataItemId": "dataItemId123",
-  "actualByteCount": 1024
-}
-\`\`\`
+### Port Conflicts
 
-**Fraud Detection**: Compares declared vs actual byte count
-- ✅ **Within ±5%**: Payment confirmed
-- ⬇️ **Under -5%**: Partial refund issued
-- ⬆️ **Over +5%**: Fraud penalty (payment kept, upload rejected)
+**Issue**: `EADDRINUSE: address already in use :::3001`
 
-### Service Info Endpoints
+```bash
+# Change port
+PORT=3002 yarn start
 
-#### Get Service Info
+# OR kill existing process
+lsof -ti:3001 | xargs kill -9
+```
 
-\`\`\`http
-GET /v1/info
-\`\`\`
+### Docker Issues
 
-#### Health Check
+**Issue**: `no space left on device`
 
-\`\`\`http
-GET /health
-\`\`\`
+```bash
+# Remove unused images and volumes
+docker system prune -a --volumes
 
-#### Prometheus Metrics
+# Check space saved
+df -h
+```
 
-\`\`\`http
-GET /bundler_metrics
-\`\`\`
+**📖 Complete troubleshooting guide:** [ADMIN.md#troubleshooting](./ADMIN.md#troubleshooting)
 
 ---
 
@@ -795,251 +599,107 @@ GET /bundler_metrics
 ### Payment Security
 
 - **EIP-712 Signatures**: Cryptographically signed USDC authorizations
-- **EIP-3009 Transfers**: Gasless USDC transfers via \`receiveWithAuthorization\`
-- **Timeout Protection**: Payment authorizations expire after \`maxTimeoutSeconds\` (default: 5 minutes)
-- **Nonce Prevention**: Each authorization uses a unique nonce to prevent replay attacks
-- **Fraud Detection**: Automatic byte-count verification with ±5% tolerance
-- **Amount Validation**: Server verifies payment amount matches pricing requirements
+- **EIP-3009 Transfers**: Gasless USDC transfers
+- **Timeout Protection**: Payment authorizations expire (default: 1 hour)
+- **Nonce Prevention**: Unique nonce prevents replay attacks
+- **Fraud Detection**: Automatic byte-count verification (±5% tolerance)
 
 ### Data Security
 
-- **Signature Verification**: All ANS-104 data items verified against owner public key
-- **ANS-104 Standard**: Full compliance with Arweave data item specification
-- **Arweave Permanence**: Data posted to Arweave blockchain for permanent storage
-- **S3 Encryption**: Optional server-side encryption for MinIO/S3 storage
-- **PostgreSQL**: Transaction logs for audit trails and payment verification
+- **Signature Verification**: All ANS-104 data items verified
+- **ANS-104 Standard**: Full compliance with Arweave specification
+- **Arweave Permanence**: Data posted to blockchain for permanent storage
+- **S3 Encryption**: Optional server-side encryption for MinIO/S3
+
+### Production Security
+
+```bash
+# Generate strong admin password
+ADMIN_PASSWORD=$(openssl rand -hex 32)
+
+# Set proper wallet permissions
+chmod 600 /path/to/wallet.json
+
+# Use HTTPS with reverse proxy (nginx/caddy)
+# Firewall: Allow 3001 (API), restrict 3002 (admin)
+```
+
+**📖 Security guide:** [ADMIN.md#security](./ADMIN.md#security)
 
 ---
 
-## 🌐 Networks & Standards
+## 📦 Docker Commands
 
-### x402 Payment Networks
+```bash
+# Start all services
+docker-compose up -d
 
-- **Base Mainnet** (chainId: 8453)
-  - USDC: \`0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913\`
-  - RPC: \`https://mainnet.base.org\`
-  - Facilitator: Coinbase CDP (requires credentials)
+# Stop all services
+docker-compose down
 
-- **Base Sepolia Testnet** (chainId: 84532) ⭐ **Default**
-  - USDC: \`0x036CbD53842c5426634e7929541eC2318f3dCF7e\`
-  - RPC: \`https://sepolia.base.org\`
-  - Facilitator: Public (https://x402.org/facilitator)
+# Stop and remove all data
+docker-compose down -v
 
-- **Ethereum Mainnet** (chainId: 1)
-  - USDC: \`0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48\`
+# View logs
+docker-compose logs -f bundler
+docker-compose logs -f workers
 
-- **Polygon Mainnet** (chainId: 137)
-  - USDC: \`0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359\`
+# Rebuild after code changes
+docker-compose up -d --build
 
-### Data Item Signatures (ANS-104)
+# Access container shell
+docker-compose exec bundler sh
+```
 
-- **Arweave** (\`signatureType: 1\`) - RSA-PSS 4096-bit keys
-- **Ethereum** (\`signatureType: 3\`) - ECDSA secp256k1
-- **Solana** (\`signatureType: 4\`) - Ed25519
-
-### Standards & Protocols
-
-- **ANS-104**: Arweave Bundled Data Item standard
-- **x402**: Coinbase HTTP 402 Payment Required protocol
-- **EIP-712**: Typed Structured Data Hashing and Signing
-- **EIP-3009**: USDC TransferWithAuthorization (gasless transfers)
-- **BullMQ**: Redis-based distributed job queues
-- **Knex.js**: SQL query builder and migration system
-
----
-
-## 🐛 Troubleshooting
-
-### Build Errors
-
-**Issue**: \`Cannot find module '@dha-team/arbundles'\`
-
-**Solution**: Install dependencies
-\`\`\`bash
-rm -rf node_modules yarn.lock
-yarn install
-\`\`\`
-
-**Issue**: \`error TS2307: Cannot find module\`
-
-**Solution**: Rebuild TypeScript
-\`\`\`bash
-yarn clean
-yarn build
-\`\`\`
-
-### Database Errors
-
-**Issue**: \`relation "new_data_item" does not exist\`
-
-**Solution**: Run migrations
-\`\`\`bash
-# Ensure PostgreSQL is running
-docker-compose up postgres -d
-
-# Run migrations
-yarn db:migrate
-\`\`\`
-
-**Issue**: \`ECONNREFUSED connecting to PostgreSQL\`
-
-**Solution**: Check database configuration and connectivity
-\`\`\`bash
-# Verify PostgreSQL is running
-docker-compose ps postgres
-
-# Check connection
-psql -h localhost -U bundler -d bundler_lite
-\`\`\`
-
-### x402 Payment Errors
-
-**Issue**: \`Invalid EIP-712 signature\`
-
-**Solution**: Verify domain, types, and signer match exactly
-\`\`\`typescript
-// Domain MUST match USDC contract exactly
-domain.chainId === networkConfig.chainId  // MUST match
-domain.verifyingContract === usdcContractAddress  // MUST match
-domain.name === "USD Coin"  // MUST match
-domain.version === "2"  // MUST match
-\`\`\`
-
-**Issue**: \`Facilitator verification failed\`
-
-**Solution**: Check facilitator URL and network configuration
-\`\`\`bash
-# Testnet (works without CDP credentials)
-X402_FACILITATOR_URL_BASE_TESTNET=https://x402.org/facilitator
-
-# Mainnet (requires CDP credentials)
-X402_FACILITATOR_URL_BASE=https://facilitator.base.coinbasecloud.net
-CDP_API_KEY_ID=your-key-id
-CDP_API_KEY_SECRET=your-secret
-\`\`\`
-
-**Issue**: \`Fraud penalty - declared vs actual byte count mismatch\`
-
-**Solution**: Ensure \`Content-Length\` header matches actual data size
-\`\`\`bash
-# Content-Length MUST match actual data size exactly
-curl -X POST "http://localhost:3001/v1/tx" \\
-  -H "Content-Length: $(wc -c < myfile.bin)" \\
-  --data-binary @myfile.bin
-\`\`\`
-
-### Wallet Errors
-
-**Issue**: \`ENOENT: no such file or directory, open './wallet.json'\`
-
-**Solution**: Use absolute path for Arweave wallet
-\`\`\`bash
-# WRONG (relative path)
-TURBO_JWK_FILE=./wallet.json
-
-# CORRECT (absolute path)
-TURBO_JWK_FILE=/home/user/ar-io-x402-bundler/wallet.json
-\`\`\`
-
-### Port Conflicts
-
-**Issue**: \`EADDRINUSE: address already in use :::3001\`
-
-**Solution**: Change port or kill existing process
-\`\`\`bash
-# Change port
-PORT=3002 yarn start
-
-# OR kill existing process
-lsof -ti:3001 | xargs kill -9
-\`\`\`
-
-### Object Storage Errors
-
-**Issue**: \`S3 connection refused\`
-
-**Solution**: Verify MinIO is running
-\`\`\`bash
-docker-compose up minio -d
-curl http://localhost:9000/minio/health/live
-\`\`\`
+**Docker runs:**
+- ✅ Bundler API (port 3001)
+- ✅ Workers (11 BullMQ queues)
+- ✅ Admin Dashboard (port 3002)
+- ✅ PostgreSQL (port 5432)
+- ✅ Redis Cache (port 6379)
+- ✅ Redis Queue (port 6381)
+- ✅ MinIO (ports 9000, 9001)
 
 ---
 
 ## 🚦 Production Deployment
 
-### Environment Checklist
+### Checklist
 
-- [ ] \`NODE_ENV=production\`
-- [ ] \`TURBO_JWK_FILE\` set to absolute path
-- [ ] \`X402_PAYMENT_ADDRESS\` configured
-- [ ] CDP credentials set (if using mainnet)
+- [ ] `NODE_ENV=production`
+- [ ] `ARWEAVE_WALLET_FILE` set to absolute path
+- [ ] `X402_PAYMENT_ADDRESS` configured
+- [ ] `UPLOAD_SERVICE_PUBLIC_URL` set to public URL
+- [ ] CDP credentials set (for mainnet)
+- [ ] `ADMIN_PASSWORD` generated and secured
 - [ ] PostgreSQL database configured
 - [ ] Redis cache and queue configured
 - [ ] Object storage (S3/MinIO) configured
-- [ ] Arweave gateway endpoint set
 - [ ] Database migrations run
-- [ ] PM2 or systemd service configured
+- [ ] HTTPS/TLS configured (reverse proxy)
+- [ ] Firewall rules configured
+- [ ] Monitoring and alerting setup
 
-### Recommended Setup
+### Recommended Stack
 
-\`\`\`bash
-# Use PM2 for process management
-npm install -g pm2
+```bash
+# Reverse proxy (nginx/caddy) for HTTPS/TLS
+# Docker for bundler services
+# Managed PostgreSQL (AWS RDS, DigitalOcean, etc.)
+# Managed Redis (AWS ElastiCache, Redis Cloud, etc.)
+# S3 or MinIO for object storage
+# Prometheus + Grafana for monitoring
+```
 
-# Start service
-pm2 start lib/server.js --name bundler-lite
-
-# Monitor
-pm2 logs bundler-lite
-pm2 monit
-
-# Auto-restart on reboot
-pm2 startup
-pm2 save
-\`\`\`
-
-### Performance Tuning
-
-- **Worker Concurrency**: Adjust BullMQ worker concurrency based on CPU cores
-- **Database Pool Size**: Configure PostgreSQL connection pooling
-- **Redis Memory**: Allocate sufficient memory for queue data
-- **Object Storage**: Use local MinIO or regional S3 for low latency
+**📖 Production deployment guide:** [ADMIN.md#deployment](./ADMIN.md#deployment)
 
 ---
 
-## 📝 License
+## 📝 Documentation
 
-AGPL-3.0 - See LICENSE file for details
-
----
-
-## 🤝 Contributing
-
-Contributions welcome! This is a production-ready bundler with x402 support.
-
-### Development Workflow
-
-1. Fork the repository
-2. Create a feature branch (\`git checkout -b feature/amazing-feature\`)
-3. Make your changes with tests
-4. Run code quality checks:
-   \`\`\`bash
-   yarn lint:fix
-   yarn format
-   yarn typecheck
-   yarn test
-   \`\`\`
-5. Commit your changes (\`git commit -m 'Add amazing feature'\`)
-6. Push to the branch (\`git push origin feature/amazing-feature\`)
-7. Open a Pull Request
-
-### Code Style
-
-- **TypeScript**: Strict mode enabled
-- **ESLint**: Enforce code quality
-- **Prettier**: Consistent formatting
-- **Tests**: Unit + integration tests for new features
+- **[ADMIN.md](./ADMIN.md)** - Complete administration and operations guide
+- **[CLAUDE.md](./CLAUDE.md)** - Architecture guide for AI assistants
+- **[.env.sample](./.env.sample)** - Environment configuration reference
 
 ---
 
@@ -1054,12 +714,17 @@ Contributions welcome! This is a production-ready bundler with x402 support.
 
 ## 🙏 Acknowledgments
 
-- **AR.IO Network** - Arweave gateway infrastructure and bundler architecture
+- **AR.IO Network** - Arweave gateway infrastructure
 - **Coinbase** - x402 payment protocol and Base chain
 - **Permanent Data Solutions** - Original AR.IO bundler design
 - **Arweave** - Permanent data storage protocol
 - **BullMQ** - Robust job queue system
-- **Community Contributors** - Thank you! 🎉
+
+---
+
+## 📄 License
+
+AGPL-3.0 - See [LICENSE](./LICENSE) file for details
 
 ---
 

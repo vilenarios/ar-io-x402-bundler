@@ -67,3 +67,4 @@ minio-data/
 # PM2 files
 .pm2/
 ecosystem.config.js.bak
+rawWallet.json

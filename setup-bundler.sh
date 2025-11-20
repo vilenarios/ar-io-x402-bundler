@@ -60,7 +60,7 @@ ELASTICACHE_HOST="redis-cache"
 ELASTICACHE_PORT="6379"
 ELASTICACHE_NO_CLUSTERING="true"
 REDIS_HOST="redis-queue"
-REDIS_PORT_QUEUES="6379"
+REDIS_PORT_QUEUES="6381"
 AWS_REGION="us-east-1"
 AWS_ENDPOINT="http://minio:9000"
 AWS_ACCESS_KEY_ID="minioadmin"
@@ -72,8 +72,9 @@ PUBLIC_ACCESS_GATEWAY="https://arweave.nexus"
 ADMIN_USERNAME="admin"
 BULL_BOARD_PORT="3002"
 X402_FRAUD_TOLERANCE_PERCENT="5"
-X402_PRICING_BUFFER_PERCENT="15"
-X402_PAYMENT_TIMEOUT_MS="300000"
+X402_FEE_PERCENT="30"
+X402_PAYMENT_TIMEOUT_MS="3600000"
+X402_MINIMUM_PAYMENT_USDC="0.001"
 MAX_DATA_ITEM_SIZE="10737418240"
 MAX_BUNDLE_SIZE="250000000"
 OPTICAL_BRIDGING_ENABLED="true"
@@ -259,10 +260,39 @@ else
   echo ""
 fi
 
+echo ""
+echo "Bundler Public URL (REQUIRED FOR PRODUCTION):"
+echo "  What public URL will users access this bundler at?"
+echo "  This is required for x402 payment flows to work correctly."
+echo ""
+echo "  Examples:"
+echo "    • https://upload.services.vilenarios.com"
+echo "    • http://localhost:3001 (for local testing)"
+echo ""
+
+while true; do
+  read -p "Bundler public URL: " UPLOAD_SERVICE_PUBLIC_URL
+
+  if [ -z "$UPLOAD_SERVICE_PUBLIC_URL" ]; then
+    echo -e "${YELLOW}⚠️  Warning: This is required for production x402 payment flows!${NC}"
+    read -p "Continue without setting? (y/N): " skip_url
+    if [[ "$skip_url" =~ ^[Yy]$ ]]; then
+      UPLOAD_SERVICE_PUBLIC_URL="http://localhost:3001"
+      echo -e "${YELLOW}⚠️${NC} Using default: http://localhost:3001"
+      break
+    fi
+  else
+    echo -e "${GREEN}✓${NC} Bundler public URL: $UPLOAD_SERVICE_PUBLIC_URL"
+    break
+  fi
+done
+
+echo ""
+
 #############################
 # Step 4: Admin Dashboard
 #############################
-echo -e "${CYAN}━━━ Step 4/5: Admin Dashboard ━━━${NC}"
+echo -e "${CYAN}━━━ Step 4/6: Admin Dashboard ━━━${NC}"
 echo ""
 echo "Configure admin dashboard access."
 echo ""
@@ -303,7 +333,7 @@ echo ""
 #############################
 # Step 5: Gateway Configuration
 #############################
-echo -e "${CYAN}━━━ Step 5/7: Gateway Configuration ━━━${NC}"
+echo -e "${CYAN}━━━ Step 5/8: Gateway Configuration ━━━${NC}"
 echo ""
 
 # Public Access Gateway - Better explanation
@@ -371,7 +401,7 @@ echo ""
 # Step 6: Gateway Integration
 #############################
 if [ "$USING_OWN_GATEWAY" == "true" ]; then
-  echo -e "${CYAN}━━━ Step 6/7: AR.IO Gateway Integration ━━━${NC}"
+  echo -e "${CYAN}━━━ Step 6/8: AR.IO Gateway Integration ━━━${NC}"
   echo ""
   echo "Let's configure vertical integration between your bundler and gateway."
   echo ""
@@ -460,20 +490,7 @@ if [ "$USING_OWN_GATEWAY" == "true" ]; then
     read -p "AR.IO Admin Key: " AR_IO_ADMIN_KEY
     echo ""
 
-    # Ask for bundler public URL ONLY if gateway integration is enabled
-    echo "Bundler Public URL:"
-    echo "  What public URL will users access this bundler at?"
-    echo "  (e.g., https://upload.services.vilenarios.com)"
-    echo ""
-    read -p "Bundler public URL: " BUNDLER_PUBLIC_URL
-
-    while [ -z "$BUNDLER_PUBLIC_URL" ]; do
-      echo -e "${YELLOW}⚠️  Bundler public URL is required for gateway integration${NC}"
-      read -p "Bundler public URL: " BUNDLER_PUBLIC_URL
-    done
-
-    echo -e "${GREEN}✓${NC} Bundler public URL: $BUNDLER_PUBLIC_URL"
-    echo ""
+    # Use UPLOAD_SERVICE_PUBLIC_URL that was already set earlier
 
     # Gateway auto-configuration
     if [ -n "$ARWEAVE_OWNER_ADDRESS" ]; then
@@ -501,14 +518,12 @@ if [ "$USING_OWN_GATEWAY" == "true" ]; then
   else
     OPTICAL_BRIDGE_URL=""
     AR_IO_ADMIN_KEY=""
-    BUNDLER_PUBLIC_URL=""
     CONFIGURE_GATEWAY="false"
   fi
 else
   # Skip gateway integration if not using own gateway
   OPTICAL_BRIDGE_URL=""
   AR_IO_ADMIN_KEY=""
-  BUNDLER_PUBLIC_URL=""
   CONFIGURE_GATEWAY="false"
 fi
 
@@ -517,7 +532,7 @@ echo ""
 #############################
 # Step 7: Optional Features
 #############################
-echo -e "${CYAN}━━━ Step 7/7: Optional Features ━━━${NC}"
+echo -e "${CYAN}━━━ Step 7/8: Optional Features ━━━${NC}"
 echo ""
 
 # Allow-listed addresses
@@ -614,6 +629,9 @@ ARWEAVE_WALLET_FILE=${ARWEAVE_WALLET_FILE}
 #############################################
 X402_PAYMENT_ADDRESS=${X402_PAYMENT_ADDRESS}
 
+# Public URL for this bundler (required for x402 payment flows)
+UPLOAD_SERVICE_PUBLIC_URL=${UPLOAD_SERVICE_PUBLIC_URL}
+
 EOF
 
 # Add CDP credentials if mainnet
@@ -622,6 +640,23 @@ if [ "$NETWORK_TYPE" == "mainnet" ]; then
 # Coinbase CDP Credentials (Mainnet)
 CDP_API_KEY_ID=${CDP_API_KEY_ID}
 CDP_API_KEY_SECRET=${CDP_API_KEY_SECRET}
+
+EOF
+fi
+
+# Add network enable flags
+if [ "$NETWORK_TYPE" == "mainnet" ]; then
+  cat >> .env << EOF
+# x402 Network Configuration
+X402_BASE_ENABLED=true
+X402_BASE_TESTNET_ENABLED=false
+
+EOF
+else
+  cat >> .env << EOF
+# x402 Network Configuration
+X402_BASE_ENABLED=false
+X402_BASE_TESTNET_ENABLED=true
 
 EOF
 fi
@@ -648,8 +683,9 @@ cat >> .env << EOF
 
 # x402 Advanced Settings
 X402_FRAUD_TOLERANCE_PERCENT=${X402_FRAUD_TOLERANCE_PERCENT}
-X402_PRICING_BUFFER_PERCENT=${X402_PRICING_BUFFER_PERCENT}
+X402_FEE_PERCENT=${X402_FEE_PERCENT}
 X402_PAYMENT_TIMEOUT_MS=${X402_PAYMENT_TIMEOUT_MS}
+X402_MINIMUM_PAYMENT_USDC=${X402_MINIMUM_PAYMENT_USDC}
 
 #############################################
 # Info Endpoint Configuration
@@ -673,20 +709,20 @@ OPTICAL_BRIDGING_ENABLED=${OPTICAL_BRIDGING_ENABLED}
 # How many days to keep filesystem backups before cleanup
 # Filesystem backups are used as hot cache during bundling
 # After bundling, items are in MinIO + Arweave, so filesystem can be cleaned
-FILESYSTEM_CLEANUP_DAYS=7
+FILESYSTEM_CLEANUP_DAYS=${FILESYSTEM_CLEANUP_DAYS}
 
 # How many days to keep MinIO data before cleanup
 # MinIO is cold storage for disaster recovery and re-bundling
 # After this period, items are only in Arweave (permanent storage)
-MINIO_CLEANUP_DAYS=90
+MINIO_CLEANUP_DAYS=${MINIO_CLEANUP_DAYS}
 
 # Cleanup job schedule (cron format)
 # Default: "0 2 * * *" (daily at 2 AM UTC)
 # Examples:
 #   "0 */6 * * *"  - Every 6 hours
 #   "0 3 * * 0"    - Weekly on Sunday at 3 AM
-#   "0 1 1 * *"    - Monthly on the 1st at 1 AM
-CLEANUP_CRON=0 2 * * *
+#   "0 1 1 * * *"    - Monthly on the 1st at 1 AM
+CLEANUP_CRON=${CLEANUP_CRON}
 
 #############################################
 # Optional: Allow-listed Addresses
@@ -783,7 +819,7 @@ AWS_S3_CONTIGUOUS_DATA_BUCKET=${DATA_ITEM_BUCKET}
 AWS_S3_CONTIGUOUS_DATA_PREFIX=raw-data-item
 
 # Bundler URL for uploads
-BUNDLER_URLS=${BUNDLER_PUBLIC_URL}
+BUNDLER_URLS=${UPLOAD_SERVICE_PUBLIC_URL}
 
 GATEWAY_EOF
 
@@ -870,9 +906,9 @@ echo "  • MinIO retention: $MINIO_CLEANUP_DAYS days"
 echo "  • Schedule: $CLEANUP_CRON (runs automatically)"
 echo ""
 
-if [ -n "$BUNDLER_PUBLIC_URL" ]; then
+if [ -n "$UPLOAD_SERVICE_PUBLIC_URL" ]; then
   echo "Bundler:"
-  echo "  • Public URL: $BUNDLER_PUBLIC_URL"
+  echo "  • Public URL: $UPLOAD_SERVICE_PUBLIC_URL"
   echo ""
 fi
 
@@ -898,7 +934,7 @@ echo ""
 #############################
 # Post-Setup Instructions
 #############################
-if [ -n "$BUNDLER_PUBLIC_URL" ]; then
+if [ -n "$UPLOAD_SERVICE_PUBLIC_URL" ]; then
   echo -e "${BOLD}📋 NEXT STEPS - Post-Setup Guide${NC}"
   echo ""
   echo "To complete your bundler deployment, follow these steps:"
@@ -948,13 +984,13 @@ if [ -n "$BUNDLER_PUBLIC_URL" ]; then
     echo -e "${CYAN}Step 4: Test the Integration${NC}"
     echo ""
     echo "  a) Check bundler info endpoint:"
-    echo "     curl ${BUNDLER_PUBLIC_URL}/"
+    echo "     curl ${UPLOAD_SERVICE_PUBLIC_URL}/v1/info"
     echo ""
     echo "  b) Check gateway can reach bundler:"
-    echo "     curl ${PUBLIC_ACCESS_GATEWAY}/local/upload/"
+    echo "     curl ${PUBLIC_ACCESS_GATEWAY}/local/upload/v1/info"
     echo ""
     echo "  c) Test upload (requires x402 payment):"
-    echo "     echo 'Hello AR.IO' | curl -X POST ${BUNDLER_PUBLIC_URL}/v1/tx \\
+    echo "     echo 'Hello AR.IO' | curl -X POST ${UPLOAD_SERVICE_PUBLIC_URL}/v1/tx \\
       --data-binary @- \\
       -H 'Content-Type: application/octet-stream'"
     echo ""
