@@ -33,13 +33,13 @@ import { X402PaymentRequiredResponse } from "../../arch/x402Service";
  * @param byteCount - Number of bytes to price
  * @param pricingService - Pricing service instance
  * @param logger - Winston logger
- * @returns USDC amount in atomic units (6 decimals) as string
+ * @returns Object with winstonCost (before conversion) and usdcAmount (in atomic units)
  */
 export async function calculateUSDCPrice(
   byteCount: number,
   pricingService: any,
   logger: winston.Logger
-): Promise<string> {
+): Promise<{ winstonCost: string; usdcAmount: string }> {
   // Get Winston cost from pricing service
   // Note: signatureType doesn't affect pricing, but required by interface
   const { reward: winstonPrice } =
@@ -75,6 +75,8 @@ export async function calculateUSDCPrice(
     process.env.X402_MINIMUM_PAYMENT_USDC || "0.001"
   );
 
+  let finalUsdcAmount = usdcAmount;
+
   // Validate parseFloat result (could be NaN if env var is malformed)
   if (isNaN(minimumUsdcWholeDollars) || minimumUsdcWholeDollars < 0) {
     logger.warn("Invalid X402_MINIMUM_PAYMENT_USDC, using default 0.001", {
@@ -82,89 +84,108 @@ export async function calculateUSDCPrice(
     });
     const defaultMinimumAtomicUnits = 1000; // 0.001 USDC
     if (parseInt(usdcAmount) < defaultMinimumAtomicUnits) {
-      return defaultMinimumAtomicUnits.toString();
+      finalUsdcAmount = defaultMinimumAtomicUnits.toString();
     }
-    return usdcAmount;
+  } else {
+    const minimumUsdcAtomicUnits = Math.floor(minimumUsdcWholeDollars * 1e6);
+
+    if (parseInt(usdcAmount) < minimumUsdcAtomicUnits) {
+      logger.debug("Applying minimum payment threshold", {
+        calculatedAmount: usdcAmount,
+        minimumAmount: minimumUsdcAtomicUnits.toString(),
+      });
+      finalUsdcAmount = minimumUsdcAtomicUnits.toString();
+    }
   }
 
-  const minimumUsdcAtomicUnits = Math.floor(minimumUsdcWholeDollars * 1e6);
-
-  if (parseInt(usdcAmount) < minimumUsdcAtomicUnits) {
-    logger.debug("Applying minimum payment threshold", {
-      calculatedAmount: usdcAmount,
-      minimumAmount: minimumUsdcAtomicUnits.toString(),
-    });
-    return minimumUsdcAtomicUnits.toString();
-  }
-
-  return usdcAmount;
+  return {
+    winstonCost: winstonWithFee.toString(),
+    usdcAmount: finalUsdcAmount,
+  };
 }
 
 /**
- * Build x402 payment requirements response
+ * Build x402 payment requirements response (matches full AR.IO bundler format)
  *
- * @param usdcAmount - USDC amount in atomic units
- * @param networkConfig - x402 network configuration
- * @param networkName - Network name (e.g., "base", "base-sepolia")
- * @param uploadServicePublicUrl - Public URL of upload service (optional, uses env var if not provided)
- * @returns x402 payment requirements response
+ * @param params - Parameters for building payment requirements
+ * @param params.token - Token string (e.g., "usdc-base")
+ * @param params.currency - Currency code (e.g., "usdc")
+ * @param params.network - Network name (e.g., "base", "base-sepolia")
+ * @param params.byteCount - Number of bytes being priced
+ * @param params.winstonCost - Winston cost (before USDC conversion)
+ * @param params.usdcAmount - USDC amount in atomic units
+ * @param params.networkConfig - x402 network configuration
+ * @param params.uploadType - Upload type ("signed data item" | "raw data")
+ * @returns x402 payment requirements response matching full bundler format
  */
-export function buildPaymentRequirements(
-  usdcAmount: string,
-  networkConfig: X402NetworkConfig,
-  networkName: string,
-  uploadServicePublicUrl?: string
-): X402PaymentRequiredResponse {
-  const publicUrl =
-    uploadServicePublicUrl ||
-    process.env.UPLOAD_SERVICE_PUBLIC_URL ||
-    "http://localhost:3001";
+export function buildPaymentRequirements(params: {
+  token: string;
+  currency: string;
+  network: string;
+  byteCount: number;
+  winstonCost: string;
+  usdcAmount: string;
+  networkConfig: X402NetworkConfig;
+  uploadType: "signed data item" | "raw data";
+}): any {
+  const {
+    token,
+    currency,
+    network,
+    byteCount,
+    winstonCost,
+    usdcAmount,
+    networkConfig,
+    uploadType,
+  } = params;
 
-  return {
-    x402Version: 1,
-    accepts: [
-      {
-        scheme: "exact",
-        network: networkName,
-        maxAmountRequired: usdcAmount,
-        resource: `${publicUrl}/v1/tx`, // Full URL required by x402 schema
-        description: "Upload data to Arweave via AR.IO Bundler",
-        mimeType: "application/json",
-        outputSchema: {
-          type: "object",
-          properties: {
-            id: { type: "string", description: "Data item ID" },
-            timestamp: {
-              type: "number",
-              description: "Upload timestamp in milliseconds",
-            },
-            owner: { type: "string", description: "Normalized wallet address" },
-            deadlineHeight: {
-              type: "number",
-              description: "Deadline block height",
-            },
-            version: { type: "string", description: "Receipt version" },
-            signature: { type: "string", description: "Receipt signature" },
-            x402Payment: {
-              type: "object",
-              description: "x402 payment details (if paid via x402)",
-              properties: {
-                paymentId: { type: "string" },
-                txHash: { type: "string" },
-                network: { type: "string" },
-                mode: { type: "string" },
-              },
-            },
-          },
-        },
-        payTo: x402PaymentAddress!,
-        maxTimeoutSeconds: Math.floor(x402PaymentTimeoutMs / 1000),
-        asset: networkConfig.usdcAddress,
-        extra: {
-          name: "USD Coin",
-          version: "2", // EIP-712 domain version for USDC
-        },
+  const publicUrl =
+    process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
+
+  // Determine resource URL based on upload type
+  const resourceUrl =
+    uploadType === "signed data item"
+      ? `${publicUrl}/v1/x402/upload/signed`
+      : `${publicUrl}/x402/upload/unsigned`;
+
+  // Build description with byte count and upload type
+  const description = `Upload ${byteCount} bytes (${uploadType}) to Arweave via AR.IO Bundler`;
+
+  // Build payment object (single object, not array)
+  const payment = {
+    scheme: "exact",
+    network,
+    maxAmountRequired: usdcAmount,
+    resource: resourceUrl,
+    description,
+    mimeType: "application/json",
+    outputSchema: {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        timestamp: { type: "number" },
+        owner: { type: "string" },
+        x402Payment: { type: "object" },
       },
-    ],
+    },
+    payTo: x402PaymentAddress!,
+    maxTimeoutSeconds: Math.floor(x402PaymentTimeoutMs / 1000),
+    asset: networkConfig.usdcAddress,
+    extra: {
+      name: "USD Coin",
+      version: "2", // EIP-712 domain version for USDC
+    },
+  };
+
+  // Return response matching full AR.IO bundler format
+  return {
+    token,
+    currency,
+    network,
+    byteCount,
+    winstonCost,
+    usdcAmount,
+    x402Version: 1,
+    payment,
   };
 }

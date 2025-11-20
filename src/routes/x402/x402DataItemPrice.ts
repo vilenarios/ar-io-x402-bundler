@@ -83,20 +83,30 @@ export async function x402DataItemPriceRoute(ctx: KoaContext, next: Next) {
     });
 
     // 3. Calculate USDC price for exact byte count (no overhead)
-    const usdcAmount = await calculateUSDCPrice(byteCount, pricingService, logger);
+    const { winstonCost, usdcAmount } = await calculateUSDCPrice(
+      byteCount,
+      pricingService,
+      logger
+    );
 
     logger.debug("Calculated USDC price", {
       byteCount,
+      winstonCost,
       usdcAmount,
       usdcDollars: (parseInt(usdcAmount) / 1e6).toFixed(6),
     });
 
-    // 4. Build payment requirements response
-    const response = buildPaymentRequirements(
+    // 4. Build payment requirements response (matches full AR.IO bundler format)
+    const response = buildPaymentRequirements({
+      token,
+      currency: tokenInfo.currency,
+      network: tokenInfo.network,
+      byteCount,
+      winstonCost,
       usdcAmount,
-      tokenInfo.networkConfig,
-      tokenInfo.network
-    );
+      networkConfig: tokenInfo.networkConfig,
+      uploadType: "signed data item",
+    });
 
     // 5. Return 200 OK with payment requirements (per x402 standard)
     ctx.status = 200;
@@ -106,6 +116,7 @@ export async function x402DataItemPriceRoute(ctx: KoaContext, next: Next) {
     logger.info("Returned x402 data item price quote", {
       token,
       byteCount,
+      winstonCost,
       usdcAmount,
       network: tokenInfo.network,
     });

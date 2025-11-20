@@ -492,9 +492,9 @@ if (isX402Enabled && !x402PaymentAddress && process.env.NODE_ENV !== "test") {
   );
 }
 
-// x402 payment validation timeout (5 minutes default)
+// x402 payment validation timeout (1 hour default - matches full AR.IO bundler)
 export const x402PaymentTimeoutMs = +(
-  process.env.X402_PAYMENT_TIMEOUT_MS ?? 300000
+  process.env.X402_PAYMENT_TIMEOUT_MS ?? 3600000
 );
 
 // x402 bundler fee percentage (30% default - this is the bundler's profit margin)

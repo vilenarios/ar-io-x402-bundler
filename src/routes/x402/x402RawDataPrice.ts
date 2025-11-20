@@ -156,7 +156,7 @@ export async function x402RawDataPriceRoute(ctx: KoaContext, next: Next) {
     });
 
     // 6. Calculate USDC price for estimated size
-    const usdcAmount = await calculateUSDCPrice(
+    const { winstonCost, usdcAmount } = await calculateUSDCPrice(
       estimatedDataItemSize,
       pricingService,
       logger
@@ -164,40 +164,57 @@ export async function x402RawDataPriceRoute(ctx: KoaContext, next: Next) {
 
     logger.debug("Calculated USDC price", {
       estimatedDataItemSize,
+      winstonCost,
       usdcAmount,
       usdcDollars: (parseInt(usdcAmount) / 1e6).toFixed(6),
     });
 
-    // 7. Build payment requirements response
-    const response = buildPaymentRequirements(
+    // 7. Build payment requirements response (matches full AR.IO bundler format)
+    const response = buildPaymentRequirements({
+      token,
+      currency: tokenInfo.currency,
+      network: tokenInfo.network,
+      byteCount: rawDataBytes, // Use raw bytes count, not estimated size
+      winstonCost,
       usdcAmount,
-      tokenInfo.networkConfig,
-      tokenInfo.network
-    );
+      networkConfig: tokenInfo.networkConfig,
+      uploadType: "raw data",
+    });
 
-    // 8. Add size breakdown for transparency
-    (response as any).sizeBreakdown = {
-      rawDataBytes,
-      ans104Overhead,
-      estimatedTotalBytes: estimatedDataItemSize,
-      tagCount: {
-        user: userTagCount,
-        contentType: contentTypeTagCount,
-        system: systemTagCount,
-        total: totalTagCount,
+    // 8. Add size breakdown for transparency (insert after byteCount, before winstonCost)
+    const responseWithBreakdown = {
+      token: response.token,
+      currency: response.currency,
+      network: response.network,
+      byteCount: response.byteCount,
+      winstonCost: response.winstonCost,
+      usdcAmount: response.usdcAmount,
+      x402Version: response.x402Version,
+      sizeBreakdown: {
+        rawDataBytes,
+        ans104Overhead,
+        estimatedTotalBytes: estimatedDataItemSize,
+        tagCount: {
+          user: userTagCount,
+          contentType: contentTypeTagCount,
+          system: systemTagCount,
+          total: totalTagCount,
+        },
       },
+      payment: response.payment,
     };
 
     // 9. Return 200 OK with payment requirements (per x402 standard)
     ctx.status = 200;
     ctx.set("Content-Type", "application/json");
-    ctx.body = response;
+    ctx.body = responseWithBreakdown;
 
     logger.info("Returned x402 raw data price quote", {
       token,
       rawDataBytes,
       estimatedDataItemSize,
       totalTagCount,
+      winstonCost,
       usdcAmount,
       network: tokenInfo.network,
     });
