@@ -56,6 +56,7 @@ const serveRoutesAndV1 = (path: string[]) =>
 // - Requires x402 payment via X-PAYMENT header OR whitelisted wallet
 // - Client provides pre-signed ANS-104 data item
 router.post("/x402/upload/signed", signedDataItemRoute);
+router.post("/x402/data-item/signed", signedDataItemRoute);
 
 // Unsigned raw data upload (explicit)
 // - ALWAYS requires x402 payment (no whitelist exemption)
@@ -70,7 +71,6 @@ router.post("/x402/upload/unsigned", unsignedDataItemRoute);
 // - For signed: same as /x402/upload/signed
 // - For unsigned: same as /x402/upload/unsigned (if RAW_DATA_UPLOADS_ENABLED=true)
 router.post(serveRoutesAndV1(["/tx", "/tx/:token"]), dataItemRoute);
-router.post("/x402/data-item/signed", dataItemRoute);
 
 // ========================================
 // x402 Payment Routes

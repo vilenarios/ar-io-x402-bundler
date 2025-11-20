@@ -164,8 +164,17 @@ All major services receive the `Architecture` instance via Koa middleware (`src/
 - `X402Service` (`src/arch/x402Service.ts`) - Verifies payments, settles USDC via facilitator
 - `X402PricingOracle` (`src/x402/x402PricingOracle.ts`) - Converts Winston (AR pricing) to USDC atomic units
 
+**Getting Price Quotes** (Two Methods):
+1. **Dedicated Pricing Endpoint** (`src/routes/x402/x402Price.ts`) - GET request returns 200 OK with payment requirements
+   - Example: `GET /v1/x402/price/3/0xAddress?bytes=1024`
+   - No data upload needed, just query parameters
+2. **Upload Endpoint Without Payment** (`src/routes/dataItemPost.ts`) - POST request returns 402 with payment requirements
+   - Example: `POST /v1/tx` with `Content-Length` header but no `X-PAYMENT` header
+   - Returns 402 Payment Required with full pricing details
+   - Pricing calculated from `Content-Length` header
+
 **Payment Flow**:
-1. **Price Quote** (`src/routes/x402/x402Price.ts`) - Returns 200 OK with payment requirements (not 402)
+1. **Get Price Quote** - Use either method above to get payment requirements
 2. **Payment Verification** (`src/routes/x402/x402Payment.ts`) - Verifies EIP-712 signature, settles USDC
 3. **Finalization** (`src/routes/x402/x402Finalize.ts`) - Fraud detection with ±5% byte count tolerance
 
@@ -218,13 +227,15 @@ Upload → new-data-item → plan-bundle → prepare-bundle → post-bundle → 
 ### Data Flow
 
 **Upload Flow** (`src/routes/dataItemPost.ts`):
-1. Client POSTs ANS-104 data item to `/v1/tx`
-2. If no `X-PAYMENT` header → return 402 with payment requirements
+1. Client POSTs ANS-104 data item to `/v1/tx` with `Content-Length` header
+2. If no `X-PAYMENT` header → return 402 with **full payment requirements** (USDC amount, networks, etc.)
+   - Pricing calculated from `Content-Length` header
+   - Client can use this response to create payment signature
 3. If `X-PAYMENT` header → verify x402 payment signature
 4. Store data item in S3 object storage
 5. Insert record into `new_data_item` table
 6. Enqueue `new-data-item` job
-7. Return signed receipt with data item ID
+7. Return signed receipt with data item ID and payment confirmation
 
 **Bundling Flow**:
 1. `plan-bundle` job fetches unbundled items from DB

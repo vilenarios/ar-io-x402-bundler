@@ -46,6 +46,8 @@ import {
   targetLength,
   x402FeePercent,
   x402PaymentTimeoutMs,
+  x402Networks,
+  x402PaymentAddress,
 } from "../constants";
 import globalLogger from "../logger";
 import { MetricRegistry } from "../metricRegistry";
@@ -330,20 +332,109 @@ export async function dataItemRoute(ctx: KoaContext, next: Next) {
   const paymentHeaderValue = ctx.headers["x-payment"] as string | undefined;
 
   if (!isWhitelisted && !paymentHeaderValue) {
-    // No payment and not whitelisted - return 402 Payment Required
+    // No payment and not whitelisted - return 402 Payment Required with full pricing
     await removeFromInFlight({ dataItemId, cacheService, logger });
     logger.info("Upload requires x402 payment (wallet not whitelisted)", {
       ownerPublicAddress,
       dataItemId,
     });
 
-    ctx.status = 402;
-    ctx.set("X-Payment-Required", "x402-1");
-    ctx.body = {
-      error: "Payment required for upload",
-      message: "Please provide x402 payment via X-PAYMENT header or use a whitelisted wallet",
-    };
-    return next();
+    // Calculate price based on content-length
+    try {
+      const { x402PricingOracle } = await import("../x402/x402PricingOracle");
+      const { pricingService } = ctx.state;
+
+      const estimatedSize = rawContentLength || 0;
+
+      // Get pricing from pricing service (Winston cost)
+      const txAttributes = await pricingService.getTxAttributesForDataItems([
+        { byteCount: estimatedSize as ByteCount, signatureType } as any,
+      ]);
+
+      const winstonPrice = txAttributes.reward ? parseInt(txAttributes.reward, 10) : 0;
+
+      // Add bundler fee (profit margin on top of Arweave costs)
+      const winstonWithFee = Math.ceil(
+        winstonPrice * (1 + x402FeePercent / 100)
+      );
+
+      // Convert Winston to USDC (using singleton for caching)
+      let usdcAmount = await x402PricingOracle.getUSDCForWinston(
+        W(winstonWithFee.toString())
+      );
+
+      // Apply minimum payment threshold (Coinbase facilitator minimum: 0.001 USDC = 1,000 atomic units)
+      const minimumUsdcWholeDollars = parseFloat(process.env.X402_MINIMUM_PAYMENT_USDC || "0.001");
+      const minimumUsdcAtomicUnits = Math.floor(minimumUsdcWholeDollars * 1e6);
+      if (parseInt(usdcAmount) < minimumUsdcAtomicUnits) {
+        logger.debug("Applying minimum payment threshold", {
+          calculatedAmount: usdcAmount,
+          minimumAmount: minimumUsdcAtomicUnits.toString(),
+        });
+        usdcAmount = minimumUsdcAtomicUnits.toString();
+      }
+
+      // Generate payment requirements for all enabled networks
+      const enabledNetworks = Object.entries(x402Networks).filter(
+        ([, config]) => config.enabled
+      );
+
+      if (enabledNetworks.length === 0) {
+        ctx.status = 503;
+        ctx.body = { error: "x402 payments are not currently available" };
+        return next();
+      }
+
+      // IMPORTANT: resource MUST be a full URL for SDK schema validation
+      const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
+
+      const accepts = enabledNetworks.map(([networkName, config]) => ({
+        scheme: "exact",
+        network: networkName,
+        maxAmountRequired: usdcAmount,
+        resource: `${uploadServicePublicUrl}/v1/tx`,
+        description: `Upload ${estimatedSize} bytes to Arweave via AR.IO Bundler`,
+        mimeType: "application/octet-stream",
+        payTo: x402PaymentAddress!,
+        maxTimeoutSeconds: Math.floor(x402PaymentTimeoutMs / 1000),
+        asset: config.usdcAddress,
+        extra: {
+          name: "USD Coin",
+          version: "2", // EIP-712 domain version for USDC
+        },
+      }));
+
+      ctx.status = 402;
+      ctx.set("X-Payment-Required", "x402-1");
+      ctx.body = {
+        x402Version: 1,
+        accepts,
+        error: "X-Payment header is required for x402 uploads.",
+      };
+
+      logger.info("Returned 402 with full payment requirements", {
+        ownerPublicAddress,
+        dataItemId,
+        estimatedSize,
+        usdcAmount,
+        networksAvailable: enabledNetworks.length,
+      });
+
+      return next();
+    } catch (pricingError) {
+      // Fallback to simple error if pricing fails
+      logger.error("Failed to calculate pricing for 402 response", {
+        error: pricingError instanceof Error ? pricingError.message : String(pricingError),
+      });
+
+      ctx.status = 402;
+      ctx.set("X-Payment-Required", "x402-1");
+      ctx.body = {
+        error: "Payment required for upload",
+        message: "Please provide x402 payment via X-PAYMENT header or use a whitelisted wallet",
+      };
+      return next();
+    }
   }
 
   // Verify x402 payment if provided (even if whitelisted, honor payment if sent)
