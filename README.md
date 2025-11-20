@@ -1,4 +1,4 @@
-# AR.IO Bundler Lite
+# AR.IO x402 Bundler
 
 **Lightweight Arweave ANS-104 bundler with x402 USDC payments - designed for AI agents and stateless applications.**
 
