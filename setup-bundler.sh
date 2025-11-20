@@ -570,6 +570,55 @@ echo -e "${GREEN}✓${NC} Cleanup schedule: $CLEANUP_CRON"
 echo ""
 
 #############################
+# Step 8: Configuration Summary
+#############################
+echo -e "${CYAN}━━━ Step 8/8: Configuration Summary ━━━${NC}"
+echo ""
+echo "Review your configuration:"
+echo ""
+echo "Network:"
+echo "  • Type: $NETWORK_TYPE"
+if [ "$NETWORK_TYPE" == "mainnet" ]; then
+  echo "  • Chain: Base Mainnet"
+else
+  echo "  • Chain: Base Sepolia (Testnet)"
+fi
+echo ""
+echo "Arweave:"
+echo "  • Wallet: $ARWEAVE_WALLET_FILE"
+echo "  • Gateway: $PUBLIC_ACCESS_GATEWAY"
+echo ""
+echo "Payment:"
+echo "  • Address: $X402_PAYMENT_ADDRESS"
+echo "  • Public URL: $UPLOAD_SERVICE_PUBLIC_URL"
+if [ "$NETWORK_TYPE" == "mainnet" ]; then
+  echo "  • CDP: Configured"
+fi
+echo ""
+echo "Storage Cleanup:"
+echo "  • Filesystem: $FILESYSTEM_CLEANUP_DAYS days"
+echo "  • MinIO: $MINIO_CLEANUP_DAYS days"
+echo "  • Schedule: $CLEANUP_CRON"
+echo ""
+if [ -n "$OPTICAL_BRIDGE_URL" ]; then
+  echo "Gateway Integration:"
+  echo "  • Enabled: Yes"
+  echo "  • URL: $ARIO_GATEWAY_URL"
+  echo ""
+fi
+echo ""
+read -p "Proceed with this configuration? (Y/n): " confirm
+confirm=${confirm:-Y}
+
+if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+  echo ""
+  echo "Setup cancelled. Run ./setup-bundler.sh to start over."
+  exit 0
+fi
+
+echo ""
+
+#############################
 # Create .env file
 #############################
 echo -e "${CYAN}━━━ Creating .env file... ━━━${NC}"
@@ -1071,7 +1120,7 @@ Generated: $(date)
 CONFIGURATION SUMMARY:
 
 Network: $NETWORK_TYPE
-Bundler Public URL: $BUNDLER_PUBLIC_URL
+Bundler Public URL: $UPLOAD_SERVICE_PUBLIC_URL
 Public Access Gateway: $PUBLIC_ACCESS_GATEWAY
 AR.IO Gateway Integration: $([ -n "$OPTICAL_BRIDGE_URL" ] && echo "Enabled" || echo "Disabled")
 
@@ -1113,13 +1162,13 @@ Step 3: Restart AR.IO Gateway
 
 Step 4: Test the Integration
   a) Check bundler info endpoint:
-     curl $BUNDLER_PUBLIC_URL/
+     curl $UPLOAD_SERVICE_PUBLIC_URL/v1/info
 
   b) Check gateway can reach bundler:
-     curl $PUBLIC_ACCESS_GATEWAY/local/upload/
+     curl $PUBLIC_ACCESS_GATEWAY/local/upload/v1/info
 
   c) Test upload:
-     echo 'Hello AR.IO' | curl -X POST $BUNDLER_PUBLIC_URL/v1/tx --data-binary @- -H 'Content-Type: application/octet-stream'
+     echo 'Hello AR.IO' | curl -X POST $UPLOAD_SERVICE_PUBLIC_URL/v1/tx --data-binary @- -H 'Content-Type: application/octet-stream'
 
 $([ "$DEPLOYMENT_TYPE" == "same-server" ] && [ "$SAME_DOCKER_NETWORK" == "true" ] && cat << NETWORK_GUIDE
 
@@ -1176,7 +1225,7 @@ GUIDE_EOF
     echo ""
     echo "  ./start-bundler.sh"
     echo ""
-    if [ -n "$BUNDLER_PUBLIC_URL" ]; then
+    if [ -n "$UPLOAD_SERVICE_PUBLIC_URL" ]; then
       echo "Post-setup guide saved to: setup-guide.txt"
       echo ""
     fi
