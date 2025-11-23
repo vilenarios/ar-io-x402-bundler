@@ -80,7 +80,6 @@ X402_FEE_PERCENT="30"
 X402_PAYMENT_TIMEOUT_MS="3600000"
 X402_MINIMUM_PAYMENT_USDC="0.001"
 MAX_DATA_ITEM_SIZE="10737418240"
-MAX_BUNDLE_SIZE="250000000"
 OPTICAL_BRIDGING_ENABLED="true"
 
 #############################
@@ -402,10 +401,56 @@ fi
 echo ""
 
 #############################
-# Step 6: Gateway Integration
+# Step 6: Bundle Configuration
+#############################
+echo -e "${CYAN}━━━ Step 6/9: Bundle Configuration ━━━${NC}"
+echo ""
+echo "Configure how your bundler groups data items into bundles."
+echo ""
+echo "Bundle Size Threshold:"
+echo "  Target size for bundles before posting to Arweave."
+echo "  Smaller bundles = faster posting, lower Arweave fees"
+echo "  Larger bundles = more efficient, better for high volume"
+echo ""
+read -p "  Max bundle size in bytes [10485760 = 10 MB]: " bundle_size_input
+MAX_BUNDLE_SIZE=${bundle_size_input:-10485760}
+
+# Convert to human-readable for display
+if [ "$MAX_BUNDLE_SIZE" -ge 1073741824 ]; then
+  BUNDLE_SIZE_DISPLAY="$(echo "scale=1; $MAX_BUNDLE_SIZE / 1073741824" | bc) GB"
+elif [ "$MAX_BUNDLE_SIZE" -ge 1048576 ]; then
+  BUNDLE_SIZE_DISPLAY="$(echo "scale=1; $MAX_BUNDLE_SIZE / 1048576" | bc) MB"
+else
+  BUNDLE_SIZE_DISPLAY="$(echo "scale=1; $MAX_BUNDLE_SIZE / 1024" | bc) KB"
+fi
+
+echo -e "${GREEN}✓${NC} Bundle size threshold: $BUNDLE_SIZE_DISPLAY"
+echo ""
+
+echo "Overdue Item Threshold:"
+echo "  Maximum time a data item waits for bundling."
+echo "  Even a single tiny item will be bundled after this time."
+echo "  This ensures all items get posted to Arweave promptly."
+echo ""
+echo "  Examples:"
+echo "    • 60000 = 1 minute (very fast)"
+echo "    • 300000 = 5 minutes (balanced)"
+echo "    • 600000 = 10 minutes (recommended)"
+echo "    • 3600000 = 1 hour (slow)"
+echo ""
+read -p "  Overdue threshold in milliseconds [600000 = 10 minutes]: " overdue_threshold_input
+OVERDUE_DATA_ITEM_THRESHOLD_MS=${overdue_threshold_input:-600000}
+
+# Convert to human-readable for display
+OVERDUE_MINUTES=$(echo "scale=1; $OVERDUE_DATA_ITEM_THRESHOLD_MS / 60000" | bc)
+echo -e "${GREEN}✓${NC} Overdue threshold: $OVERDUE_MINUTES minutes"
+echo ""
+
+#############################
+# Step 7: Gateway Integration
 #############################
 if [ "$USING_OWN_GATEWAY" == "true" ]; then
-  echo -e "${CYAN}━━━ Step 6/8: AR.IO Gateway Integration ━━━${NC}"
+  echo -e "${CYAN}━━━ Step 7/9: AR.IO Gateway Integration ━━━${NC}"
   echo ""
   echo "Let's configure vertical integration between your bundler and gateway."
   echo ""
@@ -534,9 +579,9 @@ fi
 echo ""
 
 #############################
-# Step 7: Optional Features
+# Step 8: Optional Features
 #############################
-echo -e "${CYAN}━━━ Step 7/8: Optional Features ━━━${NC}"
+echo -e "${CYAN}━━━ Step 8/9: Optional Features ━━━${NC}"
 echo ""
 
 # Allow-listed addresses
@@ -585,9 +630,9 @@ echo -e "${GREEN}✓${NC} Bundler name: $APP_NAME"
 echo ""
 
 #############################
-# Step 8: Configuration Summary
+# Step 9: Configuration Summary
 #############################
-echo -e "${CYAN}━━━ Step 8/8: Configuration Summary ━━━${NC}"
+echo -e "${CYAN}━━━ Step 9/9: Configuration Summary ━━━${NC}"
 echo ""
 echo "Review your configuration:"
 echo ""
@@ -617,6 +662,8 @@ echo "  • Ports: 9000 (API), 9001 (Console)"
 echo ""
 echo "Bundler:"
 echo "  • Name: $APP_NAME"
+echo "  • Bundle Size: $BUNDLE_SIZE_DISPLAY"
+echo "  • Overdue Threshold: $OVERDUE_MINUTES minutes"
 echo ""
 echo "Storage Cleanup:"
 echo "  • Filesystem: $FILESYSTEM_CLEANUP_DAYS days"
@@ -776,9 +823,23 @@ FREE_UPLOAD_LIMIT=${FREE_UPLOAD_LIMIT}
 #############################################
 # Bundling Configuration
 #############################################
+# Maximum size of a single data item
 MAX_DATA_ITEM_SIZE=${MAX_DATA_ITEM_SIZE}
+
+# Maximum bundle size in bytes (target size before posting to Arweave)
+# Smaller bundles = faster posting, lower fees
+# Larger bundles = more efficient, better for high volume
 MAX_BUNDLE_SIZE=${MAX_BUNDLE_SIZE}
+
+# Overdue data item threshold - items older than this get bundled immediately
+# Even a single tiny item will be bundled after this time
+# Default: 600000 ms (10 minutes)
+OVERDUE_DATA_ITEM_THRESHOLD_MS=${OVERDUE_DATA_ITEM_THRESHOLD_MS}
+
+# Bundle metadata tags - added to all bundle transactions on Arweave
 APP_NAME="${APP_NAME}"
+
+# Enable optical bridging to AR.IO gateway (requires OPTICAL_BRIDGE_URL)
 OPTICAL_BRIDGING_ENABLED=${OPTICAL_BRIDGING_ENABLED}
 
 #############################################
@@ -903,14 +964,39 @@ GATEWAY_EOF
 
     echo -e "${GREEN}✓${NC} Updated gateway .env with bundler integration"
     echo ""
-    echo -e "${YELLOW}IMPORTANT:${NC} You need to manually update this gateway setting:"
+
+    # Update ON_DEMAND_RETRIEVAL_ORDER automatically
+    echo "Updating ON_DEMAND_RETRIEVAL_ORDER..."
+    if grep -q "^ON_DEMAND_RETRIEVAL_ORDER=" "$GATEWAY_ENV_FILE"; then
+      CURRENT_ORDER=$(grep "^ON_DEMAND_RETRIEVAL_ORDER=" "$GATEWAY_ENV_FILE" | cut -d= -f2)
+
+      if echo "$CURRENT_ORDER" | grep -q "^s3,"; then
+        echo -e "${GREEN}✓${NC} ON_DEMAND_RETRIEVAL_ORDER already includes s3 first"
+      else
+        echo ""
+        echo "Current: ON_DEMAND_RETRIEVAL_ORDER=$CURRENT_ORDER"
+        echo "Updating to: ON_DEMAND_RETRIEVAL_ORDER=s3,$CURRENT_ORDER"
+        echo ""
+        read -p "Update ON_DEMAND_RETRIEVAL_ORDER? (Y/n): " update_order
+        update_order=${update_order:-Y}
+
+        if [[ "$update_order" =~ ^[Yy]$ ]]; then
+          sed -i "s|^ON_DEMAND_RETRIEVAL_ORDER=|ON_DEMAND_RETRIEVAL_ORDER=s3,|" "$GATEWAY_ENV_FILE"
+          echo -e "${GREEN}✓${NC} ON_DEMAND_RETRIEVAL_ORDER updated"
+        else
+          echo -e "${YELLOW}⚠${NC}  You'll need to manually add 's3,' to the beginning of ON_DEMAND_RETRIEVAL_ORDER"
+        fi
+      fi
+    else
+      echo -e "${YELLOW}⚠${NC}  ON_DEMAND_RETRIEVAL_ORDER not found in .env"
+      echo "   Add this line manually:"
+      echo "   ON_DEMAND_RETRIEVAL_ORDER=s3,trusted-gateways,ar-io-network,chunks-offset-aware,tx-data"
+    fi
+
     echo ""
-    echo "1. Add 's3' to the BEGINNING of ON_DEMAND_RETRIEVAL_ORDER:"
-    echo "   ON_DEMAND_RETRIEVAL_ORDER=s3,trusted-gateways,ar-io-network,chunks-offset-aware,tx-data"
+    echo -e "${GREEN}✅ Gateway configuration complete!${NC}"
     echo ""
-    echo "   This tells the gateway to check MinIO first for data items."
-    echo ""
-    echo "2. Restart your AR.IO gateway to apply changes:"
+    echo "Next step: Restart your AR.IO gateway to apply changes:"
     echo "   cd $ARIO_GATEWAY_DIR && docker-compose restart"
     echo ""
   fi
