@@ -124,7 +124,13 @@ export async function startAllWorkers(): Promise<void> {
   // Import job handlers dynamically
   const { newDataItemBatchInsertHandler } = await import("./newDataItemBatchInsert");
   const { handler: planHandler } = await import("./plan");
+  const { prepareBundleHandler } = await import("./prepare");
+  const { postBundleHandler } = await import("./post");
+  const { seedBundleHandler } = await import("./seed");
   const { handler: verifyHandler } = await import("./verify");
+  const { putOffsetsHandler } = await import("./putOffsets");
+  const { opticalPostHandler } = await import("./optical-post");
+  const { unbundleBDIBatchHandler } = await import("./unbundle-bdi");
   const { handler: cleanupHandler } = await import("./cleanup-fs");
 
   // New Data Item Worker - Processes uploads
@@ -150,11 +156,89 @@ export async function startAllWorkers(): Promise<void> {
     { concurrency: 1 }
   );
 
+  // Prepare Bundle Worker - Assembles bundles from data items
+  createWorker(
+    jobLabels.prepareBundle,
+    async (job) => {
+      const { defaultArchitecture } = await import("../arch/architecture");
+      await prepareBundleHandler(job.data.planId, {
+        database: defaultArchitecture.database,
+        objectStore: defaultArchitecture.objectStore,
+        cacheService: defaultArchitecture.cacheService,
+      });
+    },
+    { concurrency: 3 }
+  );
+
+  // Post Bundle Worker - Posts bundles to Arweave
+  createWorker(
+    jobLabels.postBundle,
+    async (job) => {
+      const { defaultArchitecture } = await import("../arch/architecture");
+      await postBundleHandler(job.data.planId, {
+        database: defaultArchitecture.database,
+        objectStore: defaultArchitecture.objectStore,
+        arweaveGateway: defaultArchitecture.arweaveGateway,
+      });
+    },
+    { concurrency: 2 }
+  );
+
+  // Seed Bundle Worker - Seeds bundles to additional gateways
+  createWorker(
+    jobLabels.seedBundle,
+    async (job) => {
+      const { defaultArchitecture } = await import("../arch/architecture");
+      await seedBundleHandler(job.data.planId, {
+        database: defaultArchitecture.database,
+        objectStore: defaultArchitecture.objectStore,
+      });
+    },
+    { concurrency: 2 }
+  );
+
   // Verify Bundle Worker
   createWorker(
     jobLabels.verifyBundle,
     async (_job) => {
       await verifyHandler();
+    },
+    { concurrency: 2 }
+  );
+
+  // Put Offsets Worker - Writes data item offset information
+  createWorker(
+    jobLabels.putOffsets,
+    async (job) => {
+      const { defaultArchitecture } = await import("../arch/architecture");
+      const knex = require("knex")(require("../arch/db/knexfile"));
+      await putOffsetsHandler(job.data.offsets, knex, logger);
+    },
+    { concurrency: 5 }
+  );
+
+  // Optical Post Worker - Posts to AR.IO Gateway optimistic cache
+  createWorker(
+    jobLabels.opticalPost,
+    async (job) => {
+      await opticalPostHandler({
+        stringifiedDataItemHeaders: [JSON.stringify(job.data)],
+        logger: logger.child({ job: "optical-post" }),
+      });
+    },
+    { concurrency: 5 }
+  );
+
+  // Unbundle BDI Worker - Extracts nested bundle data items
+  createWorker(
+    jobLabels.unbundleBdi,
+    async (job) => {
+      const { defaultArchitecture } = await import("../arch/architecture");
+      await unbundleBDIBatchHandler(
+        [{ Body: JSON.stringify(job.data) } as any],
+        logger.child({ job: "unbundle-bdi" }),
+        defaultArchitecture.cacheService
+      );
     },
     { concurrency: 2 }
   );
@@ -168,9 +252,9 @@ export async function startAllWorkers(): Promise<void> {
     { concurrency: 1 }
   );
 
-  logger.info(`Started ${workers.length} BullMQ workers`);
-  logger.warn("Note: Some workers (prepare, post, seed, optical-post, unbundle-bdi, put-offsets, finalize-upload) are not yet implemented");
-  logger.warn("Jobs for these queues will remain pending until workers are added");
+  logger.info(`Started ${workers.length} BullMQ workers successfully`, {
+    workerCount: workers.length,
+  });
 
   // Schedule recurring cleanup job
   const { scheduleCleanupJob } = await import("./scheduleCleanup");

@@ -63,10 +63,14 @@ REDIS_HOST="redis-queue"
 REDIS_PORT_QUEUES="6381"
 AWS_REGION="us-east-1"
 AWS_ENDPOINT="http://minio:9000"
-AWS_ACCESS_KEY_ID="minioadmin"
-AWS_SECRET_ACCESS_KEY="minioadmin"
 DATA_ITEM_BUCKET="bundler-data-items"
 S3_FORCE_PATH_STYLE="true"
+
+# Generate secure MinIO credentials
+MINIO_ROOT_USER="admin"
+MINIO_ROOT_PASSWORD=$(openssl rand -hex 16)
+AWS_ACCESS_KEY_ID="$MINIO_ROOT_USER"
+AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD"
 ARWEAVE_GATEWAY="https://arweave.net"
 PUBLIC_ACCESS_GATEWAY="https://arweave.nexus"
 ADMIN_USERNAME="admin"
@@ -569,6 +573,17 @@ echo -e "${GREEN}✓${NC} Cleanup schedule: $CLEANUP_CRON"
 
 echo ""
 
+# Bundler Branding
+echo "Bundler Branding:"
+echo "  Set a custom name for your bundler (shown in bundle transaction tags)."
+echo "  This helps identify your bundler's uploads on Arweave."
+echo ""
+read -p "  Bundler name [AR.IO Bundler]: " app_name_input
+APP_NAME=${app_name_input:-"AR.IO Bundler"}
+echo -e "${GREEN}✓${NC} Bundler name: $APP_NAME"
+
+echo ""
+
 #############################
 # Step 8: Configuration Summary
 #############################
@@ -594,6 +609,14 @@ echo "  • Public URL: $UPLOAD_SERVICE_PUBLIC_URL"
 if [ "$NETWORK_TYPE" == "mainnet" ]; then
   echo "  • CDP: Configured"
 fi
+echo ""
+echo "Object Storage:"
+echo "  • MinIO User: $MINIO_ROOT_USER"
+echo "  • MinIO Password: $MINIO_ROOT_PASSWORD"
+echo "  • Ports: 9000 (API), 9001 (Console)"
+echo ""
+echo "Bundler:"
+echo "  • Name: $APP_NAME"
 echo ""
 echo "Storage Cleanup:"
 echo "  • Filesystem: $FILESYSTEM_CLEANUP_DAYS days"
@@ -661,10 +684,16 @@ REDIS_PORT_QUEUES=${REDIS_PORT_QUEUES}
 #############################################
 AWS_REGION=${AWS_REGION}
 AWS_ENDPOINT=${AWS_ENDPOINT}
-AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 DATA_ITEM_BUCKET=${DATA_ITEM_BUCKET}
 S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE}
+
+# MinIO credentials (auto-generated secure password)
+MINIO_ROOT_USER=${MINIO_ROOT_USER}
+MINIO_ROOT_PASSWORD=${MINIO_ROOT_PASSWORD}
+
+# AWS SDK credentials (match MinIO credentials)
+AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
 
 #############################################
 # Arweave Configuration
@@ -749,7 +778,7 @@ FREE_UPLOAD_LIMIT=${FREE_UPLOAD_LIMIT}
 #############################################
 MAX_DATA_ITEM_SIZE=${MAX_DATA_ITEM_SIZE}
 MAX_BUNDLE_SIZE=${MAX_BUNDLE_SIZE}
-APP_NAME=AR.IO Bundler
+APP_NAME="${APP_NAME}"
 OPTICAL_BRIDGING_ENABLED=${OPTICAL_BRIDGING_ENABLED}
 
 #############################################
@@ -770,8 +799,8 @@ MINIO_CLEANUP_DAYS=${MINIO_CLEANUP_DAYS}
 # Examples:
 #   "0 */6 * * *"  - Every 6 hours
 #   "0 3 * * 0"    - Weekly on Sunday at 3 AM
-#   "0 1 1 * * *"    - Monthly on the 1st at 1 AM
-CLEANUP_CRON=${CLEANUP_CRON}
+#   "0 1 1 * *"    - Monthly on the 1st at 1 AM
+CLEANUP_CRON="${CLEANUP_CRON}"
 
 #############################################
 # Optional: Allow-listed Addresses
@@ -947,6 +976,13 @@ echo "Admin Dashboard:"
 echo "  • URL: http://localhost:$BULL_BOARD_PORT"
 echo "  • Username: $ADMIN_USERNAME"
 echo "  • Password: $ADMIN_PASSWORD"
+echo ""
+
+echo "MinIO Object Storage:"
+echo "  • API: http://localhost:9000"
+echo "  • Console: http://localhost:9001"
+echo "  • Username: $MINIO_ROOT_USER"
+echo "  • Password: $MINIO_ROOT_PASSWORD"
 echo ""
 
 echo "Data Cleanup:"

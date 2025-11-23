@@ -14,6 +14,7 @@
  * You should have received a copy of the GNU Affero General Public License
  * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
+import { randomUUID } from "crypto";
 import knex, { Knex } from "knex";
 import path from "path";
 import winston from "winston";
@@ -1408,15 +1409,20 @@ export class PostgresDatabase implements Database {
     dataItemId?: DataItemId;
     byteCount: number;
   }): Promise<void> {
-    await this.writer("x402_payments").insert({
-      payment_id: params.paymentId,
+    await this.writer("x402_payment_transaction").insert({
+      id: params.paymentId,
+      user_address: params.payerAddress,
+      user_address_type: 'ethereum',
       tx_hash: params.txHash,
       network: params.network,
-      payer_address: params.payerAddress,
+      token_address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
       usdc_amount: params.usdcAmount,
       winc_amount: params.wincAmount.toString(),
+      mode: 'payg',
       data_item_id: params.dataItemId || null,
-      byte_count: params.byteCount,
+      declared_byte_count: params.byteCount.toString(),
+      payer_address: params.payerAddress,
+      status: 'confirmed',
     });
   }
 
@@ -1424,36 +1430,36 @@ export class PostgresDatabase implements Database {
     paymentId: string,
     dataItemId: DataItemId
   ): Promise<void> {
-    await this.writer("x402_payments")
-      .where({ payment_id: paymentId })
+    await this.writer("x402_payment_transaction")
+      .where({ id: paymentId })
       .update({ data_item_id: dataItemId });
   }
 
   async getX402PaymentsByPayer(
     payerAddress: string
   ): Promise<X402Payment[]> {
-    const rows = await this.reader("x402_payments")
+    const rows = await this.reader("x402_payment_transaction")
       .where({ payer_address: payerAddress })
-      .orderBy("created_at", "desc");
+      .orderBy("paid_at", "desc");
 
     return rows.map((row: any) => ({
-      paymentId: row.payment_id,
+      paymentId: row.id,
       txHash: row.tx_hash,
       network: row.network,
       payerAddress: row.payer_address,
       usdcAmount: row.usdc_amount,
       wincAmount: W(row.winc_amount),
       dataItemId: row.data_item_id,
-      byteCount: +row.byte_count,
-      createdAt: row.created_at,
-      settledAt: row.settled_at,
+      byteCount: +(row.declared_byte_count || row.actual_byte_count || 0),
+      createdAt: row.paid_at,
+      settledAt: row.paid_at,
     }));
   }
 
   async getX402PaymentByDataItemId(
     dataItemId: DataItemId
   ): Promise<X402Payment | null> {
-    const row = await this.reader("x402_payments")
+    const row = await this.reader("x402_payment_transaction")
       .where({ data_item_id: dataItemId })
       .first();
 
@@ -1462,73 +1468,41 @@ export class PostgresDatabase implements Database {
     }
 
     return {
-      paymentId: row.payment_id,
+      paymentId: row.id,
       txHash: row.tx_hash,
       network: row.network,
       payerAddress: row.payer_address,
       usdcAmount: row.usdc_amount,
       wincAmount: W(row.winc_amount),
       dataItemId: row.data_item_id,
-      uploadId: row.upload_id,
-      byteCount: +row.byte_count,
-      createdAt: row.created_at,
-      settledAt: row.settled_at,
+      uploadId: undefined, // Not supported in new schema yet
+      byteCount: +(row.declared_byte_count || row.actual_byte_count || 0),
+      createdAt: row.paid_at,
+      settledAt: row.paid_at,
     };
   }
 
   async getX402PaymentByUploadId(
     uploadId: string
   ): Promise<X402Payment | null> {
-    const row = await this.reader("x402_payments")
-      .where({ upload_id: uploadId })
-      .first();
-
-    if (!row) {
-      return null;
-    }
-
-    return {
-      paymentId: row.payment_id,
-      txHash: row.tx_hash,
-      network: row.network,
-      payerAddress: row.payer_address,
-      usdcAmount: row.usdc_amount,
-      wincAmount: W(row.winc_amount),
-      dataItemId: row.data_item_id,
-      uploadId: row.upload_id,
-      byteCount: +row.byte_count,
-      createdAt: row.created_at,
-      settledAt: row.settled_at,
-    };
+    // Note: upload_id not in x402_payment_transaction schema yet
+    // This is for future multipart upload support
+    return null;
   }
 
   async getX402PaymentsByUploadId(
     uploadId: string
   ): Promise<X402Payment[]> {
-    const rows = await this.reader("x402_payments")
-      .where({ upload_id: uploadId })
-      .orderBy("created_at", "asc");
-
-    return rows.map((row) => ({
-      paymentId: row.payment_id,
-      txHash: row.tx_hash,
-      network: row.network,
-      payerAddress: row.payer_address,
-      usdcAmount: row.usdc_amount,
-      wincAmount: W(row.winc_amount),
-      dataItemId: row.data_item_id,
-      uploadId: row.upload_id,
-      byteCount: +row.byte_count,
-      createdAt: row.created_at,
-      settledAt: row.settled_at,
-    }));
+    // Note: upload_id not in x402_payment_transaction schema yet
+    // This is for future multipart upload support
+    return [];
   }
 
   async getX402PaymentById(
     paymentId: string
   ): Promise<X402Payment | null> {
-    const row = await this.reader("x402_payments")
-      .where({ payment_id: paymentId })
+    const row = await this.reader("x402_payment_transaction")
+      .where({ id: paymentId })
       .first();
 
     if (!row) {
@@ -1536,17 +1510,17 @@ export class PostgresDatabase implements Database {
     }
 
     return {
-      paymentId: row.payment_id,
+      paymentId: row.id,
       txHash: row.tx_hash,
       network: row.network,
       payerAddress: row.payer_address,
       usdcAmount: row.usdc_amount,
       wincAmount: W(row.winc_amount),
       dataItemId: row.data_item_id,
-      uploadId: row.upload_id,
-      byteCount: +row.byte_count,
-      createdAt: row.created_at,
-      settledAt: row.settled_at,
+      uploadId: undefined,
+      byteCount: +(row.declared_byte_count || row.actual_byte_count || 0),
+      createdAt: row.paid_at,
+      settledAt: row.paid_at,
     };
   }
 
@@ -1554,12 +1528,9 @@ export class PostgresDatabase implements Database {
     paymentId: string,
     uploadId: string
   ): Promise<void> {
-    await this.writer("x402_payments")
-      .where({ payment_id: paymentId })
-      .update({
-        upload_id: uploadId,
-        updated_at: new Date().toISOString(),
-      });
+    // Note: upload_id not in x402_payment_transaction schema yet
+    // This is for future multipart upload support
+    // Do nothing for now
   }
 
   async createX402Payment(params: {
@@ -1576,16 +1547,16 @@ export class PostgresDatabase implements Database {
     declaredByteCount?: number;
     payerAddress: string;
   }): Promise<X402Payment> {
-    const paymentId = `x402_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const paymentId = randomUUID();
     const now = new Date().toISOString();
 
-    // Validation: must have either dataItemId OR uploadId
+    // Validation: must have either dataItemId OR uploadId (uploadId not supported yet)
     if (!params.dataItemId && !params.uploadId) {
       throw new Error('createX402Payment requires either dataItemId or uploadId');
     }
 
-    await this.writer("x402_payments").insert({
-      payment_id: paymentId,
+    await this.writer("x402_payment_transaction").insert({
+      id: paymentId,
       user_address: params.userAddress,
       user_address_type: params.userAddressType,
       tx_hash: params.txHash,
@@ -1595,12 +1566,9 @@ export class PostgresDatabase implements Database {
       winc_amount: params.wincAmount.toString(),
       mode: params.mode,
       data_item_id: params.dataItemId || null,
-      upload_id: params.uploadId || null,
-      declared_byte_count: params.declaredByteCount || null,
+      declared_byte_count: params.declaredByteCount?.toString() || null,
       payer_address: params.payerAddress,
       status: 'pending_validation',
-      created_at: now,
-      settled_at: now,
     });
 
     return {
@@ -1624,10 +1592,10 @@ export class PostgresDatabase implements Database {
     status: 'confirmed' | 'refunded' | 'fraud_penalty';
     refundWinc?: Winston;
   }): Promise<void> {
-    await this.writer("x402_payments")
-      .where({ payment_id: params.paymentId })
+    await this.writer("x402_payment_transaction")
+      .where({ id: params.paymentId })
       .update({
-        actual_byte_count: params.actualByteCount,
+        actual_byte_count: params.actualByteCount.toString(),
         status: params.status,
         refund_winc: params.refundWinc?.toString() || null,
         finalized_at: new Date().toISOString(),

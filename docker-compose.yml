@@ -13,7 +13,6 @@ services:
       - postgres-data:/var/lib/postgresql/data
     networks:
       - ar-io-x402-bundler-network
-      - ar-io-network
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 10s
@@ -29,7 +28,6 @@ services:
     command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
     networks:
       - ar-io-x402-bundler-network
-      - ar-io-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -44,7 +42,6 @@ services:
       - "6381:6379"
     networks:
       - ar-io-x402-bundler-network
-      - ar-io-network
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -59,14 +56,13 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     command: server /data --console-address ":9001"
     volumes:
       - minio-data:/data
     networks:
       - ar-io-x402-bundler-network
-      - ar-io-network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
       interval: 30s
@@ -81,12 +77,14 @@ services:
       minio:
         condition: service_healthy
     restart: "no"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     networks:
       - ar-io-x402-bundler-network
-      - ar-io-network
     entrypoint: >
       /bin/sh -c "
-      mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      mc alias set myminio http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
       mc mb myminio/bundler-data-items --ignore-existing;
       mc anonymous set download myminio/bundler-data-items;
       echo 'MinIO bucket initialized successfully';
@@ -136,8 +134,8 @@ services:
       # MinIO (S3-compatible object storage)
       AWS_REGION: us-east-1
       AWS_ENDPOINT: http://minio:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       DATA_ITEM_BUCKET: bundler-data-items
       S3_FORCE_PATH_STYLE: "true"
 
@@ -186,7 +184,6 @@ services:
       - bundler-data:/app/upload-service-data
     networks:
       - ar-io-x402-bundler-network
-      - ar-io-network
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "node", "-e", "require('http').get('http://localhost:3001/health', (r) => { process.exit(r.statusCode === 200 ? 0 : 1); })"]
@@ -234,8 +231,8 @@ services:
       # MinIO (S3-compatible object storage)
       AWS_REGION: us-east-1
       AWS_ENDPOINT: http://minio:9000
-      AWS_ACCESS_KEY_ID: minioadmin
-      AWS_SECRET_ACCESS_KEY: minioadmin
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
       DATA_ITEM_BUCKET: bundler-data-items
       S3_FORCE_PATH_STYLE: "true"
 
@@ -284,7 +281,6 @@ services:
       - bundler-data:/app/upload-service-data
     networks:
       - ar-io-x402-bundler-network
-      - ar-io-network
     restart: unless-stopped
     healthcheck:
       disable: true
@@ -342,7 +338,6 @@ services:
       X_402_CDP_CLIENT_KEY: ${X_402_CDP_CLIENT_KEY}
     networks:
       - ar-io-x402-bundler-network
-      - ar-io-network
     restart: unless-stopped
 
 volumes:
@@ -354,5 +349,3 @@ volumes:
 networks:
   ar-io-x402-bundler-network:
     name: ar-io-x402-bundler-network
-  ar-io-network:
-    external: true

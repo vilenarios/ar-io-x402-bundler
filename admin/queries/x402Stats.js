@@ -18,8 +18,8 @@ const USDC_DECIMALS = 1000000;
  */
 async function getX402Stats(db) {
   try {
-    // Check if table exists first
-    const tableExists = await db.schema.hasTable('x402_payments');
+    // Check if table exists first (use new table name)
+    const tableExists = await db.schema.hasTable('x402_payment_transaction');
 
     if (!tableExists) {
       return getEmptyX402Stats();
@@ -48,12 +48,12 @@ async function getX402Stats(db) {
  * Get total x402 payment statistics
  */
 async function getTotalX402Stats(db) {
-  const result = await db('x402_payments')
+  const result = await db('x402_payment_transaction')
     .select(
       db.raw('COUNT(*) as total_count'),
       db.raw('COALESCE(SUM(CAST(usdc_amount AS NUMERIC)), 0) as total_usdc'),
       db.raw('COALESCE(AVG(CAST(usdc_amount AS NUMERIC)), 0) as average_payment'),
-      db.raw('COALESCE(SUM(byte_count), 0) as total_bytes'),
+      db.raw('COALESCE(SUM(CAST(COALESCE(declared_byte_count, actual_byte_count, \'0\') AS BIGINT)), 0) as total_bytes'),
       db.raw('COUNT(DISTINCT payer_address) as unique_payers')
     )
     .first();
@@ -72,12 +72,12 @@ async function getTotalX402Stats(db) {
  * Get x402 payments by network
  */
 async function getX402NetworkStats(db) {
-  const results = await db('x402_payments')
+  const results = await db('x402_payment_transaction')
     .select(
       'network',
       db.raw('COUNT(*) as count'),
       db.raw('COALESCE(SUM(CAST(usdc_amount AS NUMERIC)), 0) as total_amount'),
-      db.raw('COALESCE(SUM(byte_count), 0) as total_bytes')
+      db.raw('COALESCE(SUM(CAST(COALESCE(declared_byte_count, actual_byte_count, \'0\') AS BIGINT)), 0) as total_bytes')
     )
     .groupBy('network')
     .orderBy('count', 'desc');
@@ -99,12 +99,12 @@ async function getX402NetworkStats(db) {
  * Get top x402 payers (by payment count)
  */
 async function getTopX402Payers(db, limit = 10) {
-  const results = await db('x402_payments')
+  const results = await db('x402_payment_transaction')
     .select(
       'payer_address',
       db.raw('COUNT(*) as payment_count'),
       db.raw('COALESCE(SUM(CAST(usdc_amount AS NUMERIC)), 0) as total_usdc'),
-      db.raw('COALESCE(SUM(byte_count), 0) as total_bytes')
+      db.raw('COALESCE(SUM(CAST(COALESCE(declared_byte_count, actual_byte_count, \'0\') AS BIGINT)), 0) as total_bytes')
     )
     .groupBy('payer_address')
     .orderBy('payment_count', 'desc')
@@ -123,30 +123,31 @@ async function getTopX402Payers(db, limit = 10) {
  * Get recent x402 payments (last 50)
  */
 async function getRecentX402Payments(db, limit = 50) {
-  const results = await db('x402_payments')
+  const results = await db('x402_payment_transaction')
     .select(
-      'payment_id',
+      'id',
       'tx_hash',
       'network',
       'payer_address',
       'usdc_amount',
-      'byte_count',
+      'declared_byte_count',
+      'actual_byte_count',
       'data_item_id',
-      'created_at'
+      'paid_at'
     )
-    .orderBy('created_at', 'desc')
+    .orderBy('paid_at', 'desc')
     .limit(limit);
 
   return results.map(row => ({
-    paymentId: row.payment_id,
+    paymentId: row.id,
     txHash: row.tx_hash,
     network: row.network,
     payerAddress: row.payer_address,
     amount: `${(parseFloat(row.usdc_amount) / USDC_DECIMALS).toFixed(6)} USDC`,
-    bytes: parseInt(row.byte_count),
-    bytesFormatted: formatBytes(row.byte_count),
+    bytes: parseInt(row.declared_byte_count || row.actual_byte_count || 0),
+    bytesFormatted: formatBytes(row.declared_byte_count || row.actual_byte_count || 0),
     dataItemId: row.data_item_id,
-    timestamp: row.created_at
+    timestamp: row.paid_at
   }));
 }
 
