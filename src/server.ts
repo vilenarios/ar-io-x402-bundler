@@ -105,12 +105,14 @@ export async function createServer(
   app.use(router.routes());
   // Bind to 0.0.0.0 to accept connections from nginx proxy on separate server
   const server = app.listen(port, '0.0.0.0');
-  server.keepAliveTimeout = 120_000; // intentionally larger than ALB idle timeout
-  server.requestTimeout = 0; // disable request timeout
+  server.keepAliveTimeout = +(process.env.KEEP_ALIVE_TIMEOUT_MS || 120_000); // intentionally larger than ALB idle timeout
+  server.requestTimeout = +(process.env.REQUEST_TIMEOUT_MS || 600_000); // 10 minutes default (for large uploads)
+  server.headersTimeout = +(process.env.HEADERS_TIMEOUT_MS || 620_000); // Must be > requestTimeout
 
   globalLogger.info(`Listening on port ${port}...`);
   globalLogger.info(`x402 USDC payments enabled for stateless uploads`);
-  globalLogger.info(`Keep alive is: ${server.keepAliveTimeout}`);
-  globalLogger.info(`Request timeout is: ${server.requestTimeout}`);
+  globalLogger.info(`Keep alive timeout: ${server.keepAliveTimeout}ms`);
+  globalLogger.info(`Request timeout: ${server.requestTimeout}ms`);
+  globalLogger.info(`Headers timeout: ${server.headersTimeout}ms`);
   return server;
 }

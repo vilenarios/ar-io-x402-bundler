@@ -49,10 +49,11 @@ function getElasticacheInFlightKey(dataItemId: TransactionId) {
   return `${elasticacheInFlightPrefix}{${dataItemId}}`;
 }
 const inFlightTtlSeconds = +(process.env.IN_FLIGHT_DATA_ITEM_TTL_SECS ?? 60); // Block attempted duplicates for 1 minute
+const inFlightCacheCapacity = +(process.env.IN_FLIGHT_CACHE_CAPACITY ?? 10000); // Max items in local cache
 
 // In-memory cache for fallback scenarios
 const backupCache = TemporaryCache<TransactionId, boolean>(
-  1000,
+  inFlightCacheCapacity,
   inFlightTtlSeconds * 1_000
 );
 
@@ -65,7 +66,7 @@ const inFlightDataItemCache = new ReadThroughPromiseCache<
   }
 >({
   cacheParams: {
-    cacheCapacity: 10000,
+    cacheCapacity: inFlightCacheCapacity,
     cacheTTLMillis: inFlightTtlSeconds * 1000, // secs -> ms
   },
   metricsConfig: {

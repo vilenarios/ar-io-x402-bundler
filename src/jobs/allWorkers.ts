@@ -34,6 +34,21 @@ import globalLogger from "../logger";
 
 const logger = globalLogger.child({ service: "workers" });
 
+// Worker concurrency configuration from environment variables
+// These control how many jobs each worker processes simultaneously
+const workerConcurrency = {
+  newDataItem: +(process.env.WORKER_CONCURRENCY_NEW_DATA_ITEM || 10),
+  planBundle: +(process.env.WORKER_CONCURRENCY_PLAN_BUNDLE || 5),
+  prepareBundle: +(process.env.WORKER_CONCURRENCY_PREPARE_BUNDLE || 5),
+  postBundle: +(process.env.WORKER_CONCURRENCY_POST_BUNDLE || 3),
+  seedBundle: +(process.env.WORKER_CONCURRENCY_SEED_BUNDLE || 3),
+  verifyBundle: +(process.env.WORKER_CONCURRENCY_VERIFY_BUNDLE || 3),
+  putOffsets: +(process.env.WORKER_CONCURRENCY_PUT_OFFSETS || 5),
+  opticalPost: +(process.env.WORKER_CONCURRENCY_OPTICAL_POST || 10),
+  unbundleBdi: +(process.env.WORKER_CONCURRENCY_UNBUNDLE_BDI || 3),
+  cleanupFs: +(process.env.WORKER_CONCURRENCY_CLEANUP_FS || 1),
+};
+
 // Worker configuration
 const defaultWorkerOptions: Omit<WorkerOptions, "connection"> = {
   concurrency: 1, // Process one job at a time by default
@@ -121,6 +136,9 @@ function createWorker(
 export async function startAllWorkers(): Promise<void> {
   logger.info("Starting all BullMQ workers...");
 
+  // Log worker concurrency configuration
+  logger.info("Worker concurrency configuration:", workerConcurrency);
+
   // Import job handlers dynamically
   const { newDataItemBatchInsertHandler } = await import("./newDataItemBatchInsert");
   const { handler: planHandler } = await import("./plan");
@@ -144,7 +162,7 @@ export async function startAllWorkers(): Promise<void> {
         uploadDatabase: defaultArchitecture.database,
       });
     },
-    { concurrency: 5 }
+    { concurrency: workerConcurrency.newDataItem }
   );
 
   // Plan Bundle Worker
@@ -153,7 +171,7 @@ export async function startAllWorkers(): Promise<void> {
     async (_job) => {
       await planHandler();
     },
-    { concurrency: 1 }
+    { concurrency: workerConcurrency.planBundle }
   );
 
   // Prepare Bundle Worker - Assembles bundles from data items
@@ -167,7 +185,7 @@ export async function startAllWorkers(): Promise<void> {
         cacheService: defaultArchitecture.cacheService,
       });
     },
-    { concurrency: 3 }
+    { concurrency: workerConcurrency.prepareBundle }
   );
 
   // Post Bundle Worker - Posts bundles to Arweave
@@ -181,7 +199,7 @@ export async function startAllWorkers(): Promise<void> {
         arweaveGateway: defaultArchitecture.arweaveGateway,
       });
     },
-    { concurrency: 2 }
+    { concurrency: workerConcurrency.postBundle }
   );
 
   // Seed Bundle Worker - Seeds bundles to additional gateways
@@ -194,7 +212,7 @@ export async function startAllWorkers(): Promise<void> {
         objectStore: defaultArchitecture.objectStore,
       });
     },
-    { concurrency: 2 }
+    { concurrency: workerConcurrency.seedBundle }
   );
 
   // Verify Bundle Worker
@@ -203,7 +221,7 @@ export async function startAllWorkers(): Promise<void> {
     async (_job) => {
       await verifyHandler();
     },
-    { concurrency: 2 }
+    { concurrency: workerConcurrency.verifyBundle }
   );
 
   // Put Offsets Worker - Writes data item offset information
@@ -214,7 +232,7 @@ export async function startAllWorkers(): Promise<void> {
       const knex = require("knex")(require("../arch/db/knexfile"));
       await putOffsetsHandler(job.data.offsets, knex, logger);
     },
-    { concurrency: 5 }
+    { concurrency: workerConcurrency.putOffsets }
   );
 
   // Optical Post Worker - Posts to AR.IO Gateway optimistic cache
@@ -226,7 +244,7 @@ export async function startAllWorkers(): Promise<void> {
         logger: logger.child({ job: "optical-post" }),
       });
     },
-    { concurrency: 5 }
+    { concurrency: workerConcurrency.opticalPost }
   );
 
   // Unbundle BDI Worker - Extracts nested bundle data items
@@ -240,7 +258,7 @@ export async function startAllWorkers(): Promise<void> {
         defaultArchitecture.cacheService
       );
     },
-    { concurrency: 2 }
+    { concurrency: workerConcurrency.unbundleBdi }
   );
 
   // Cleanup Filesystem Worker
@@ -249,7 +267,7 @@ export async function startAllWorkers(): Promise<void> {
     async (_job) => {
       await cleanupHandler();
     },
-    { concurrency: 1 }
+    { concurrency: workerConcurrency.cleanupFs }
   );
 
   logger.info(`Started ${workers.length} BullMQ workers successfully`, {

@@ -51,6 +51,17 @@ export function getWriterConfig() {
   return {
     ...baseConfig,
     connection: getDbConnection(dbHost),
+    pool: {
+      min: +(process.env.DB_POOL_MIN || 10),
+      max: +(process.env.DB_POOL_MAX || 50),
+      idleTimeoutMillis: +(process.env.DB_POOL_IDLE_TIMEOUT_MS || 30000),
+      acquireTimeoutMillis: +(process.env.DB_POOL_ACQUIRE_TIMEOUT_MS || 60000),
+      createTimeoutMillis: +(process.env.DB_POOL_CREATE_TIMEOUT_MS || 30000),
+      reapIntervalMillis: +(process.env.DB_POOL_REAP_INTERVAL_MS || 1000),
+      createRetryIntervalMillis: +(process.env.DB_POOL_CREATE_RETRY_INTERVAL_MS || 200),
+    },
+    // Enable debug logging for connection pool issues (only in development)
+    debug: process.env.NODE_ENV !== 'production' && process.env.DB_DEBUG === 'true',
   };
 }
 
@@ -63,5 +74,15 @@ export function getReaderConfig() {
   return {
     ...baseConfig,
     connection: getDbConnection(dbHost),
+    pool: {
+      min: +(process.env.DB_POOL_MIN || 10),
+      max: +(process.env.DB_POOL_MAX || 50),
+      idleTimeoutMillis: +(process.env.DB_POOL_IDLE_TIMEOUT_MS || 30000),
+      acquireTimeoutMillis: +(process.env.DB_POOL_ACQUIRE_TIMEOUT_MS || 60000),
+      createTimeoutMillis: +(process.env.DB_POOL_CREATE_TIMEOUT_MS || 30000),
+      reapIntervalMillis: +(process.env.DB_POOL_REAP_INTERVAL_MS || 1000),
+      createRetryIntervalMillis: +(process.env.DB_POOL_CREATE_RETRY_INTERVAL_MS || 200),
+    },
+    debug: process.env.NODE_ENV !== 'production' && process.env.DB_DEBUG === 'true',
   };
 }

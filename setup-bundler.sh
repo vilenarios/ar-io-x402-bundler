@@ -706,6 +706,26 @@ PORT=${PORT}
 LOG_LEVEL=${LOG_LEVEL}
 
 #############################################
+# HTTP Server Timeouts
+#############################################
+# Request timeout (milliseconds)
+# How long to wait for a request to complete before timing out
+# For large file uploads (10 GiB @ 10 MB/s = ~1000 seconds), set high
+# Default: 600000 ms (10 minutes)
+REQUEST_TIMEOUT_MS=600000
+
+# Headers timeout (milliseconds)
+# Must be greater than REQUEST_TIMEOUT_MS to avoid race conditions
+# Default: 620000 ms (10 minutes 20 seconds)
+HEADERS_TIMEOUT_MS=620000
+
+# Keep-alive timeout (milliseconds)
+# How long to keep idle connections alive
+# Should be greater than load balancer/proxy timeout
+# Default: 120000 ms (2 minutes)
+KEEP_ALIVE_TIMEOUT_MS=120000
+
+#############################################
 # Database Configuration
 #############################################
 DB_HOST=${DB_HOST}
@@ -713,6 +733,37 @@ DB_PORT=${DB_PORT}
 DB_USER=${DB_USER}
 DB_PASSWORD=${DB_PASSWORD}
 DB_DATABASE=${DB_DATABASE}
+
+#############################################
+# Database Connection Pool Configuration
+#############################################
+# Connection pool settings for high-throughput operations
+# Increase these values if you experience "Knex: Timeout acquiring a connection" errors
+
+# Minimum number of connections to maintain (always connected)
+DB_POOL_MIN=10
+
+# Maximum number of concurrent database connections
+# Rule of thumb: max = (expected_concurrent_uploads * 2) + 10
+# For 100 uploads/sec: 100 * 2 + 10 = 210 (use 50 for safety margin)
+DB_POOL_MAX=50
+
+# How long to keep idle connections alive (milliseconds)
+# Lower = less resource usage, higher = faster response on burst traffic
+DB_POOL_IDLE_TIMEOUT_MS=30000
+
+# How long to wait for an available connection before timing out (milliseconds)
+# Increase if you see timeout errors under load
+DB_POOL_ACQUIRE_TIMEOUT_MS=60000
+
+# How long to wait when creating a new database connection (milliseconds)
+DB_POOL_CREATE_TIMEOUT_MS=30000
+
+# How often to check for expired connections (milliseconds)
+DB_POOL_REAP_INTERVAL_MS=1000
+
+# Retry interval when connection creation fails (milliseconds)
+DB_POOL_CREATE_RETRY_INTERVAL_MS=200
 
 #############################################
 # Redis Configuration
@@ -904,6 +955,38 @@ cat >> .env << EOF
 ADMIN_USERNAME=${ADMIN_USERNAME}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
 BULL_BOARD_PORT=${BULL_BOARD_PORT}
+
+#############################################
+# BullMQ Worker Concurrency Configuration
+#############################################
+# Control how many jobs each worker processes simultaneously
+# Higher values = better throughput, but more CPU/memory/DB connections
+# Adjust based on your infrastructure capacity
+
+# Upload processing workers
+WORKER_CONCURRENCY_NEW_DATA_ITEM=10
+WORKER_CONCURRENCY_OPTICAL_POST=10
+WORKER_CONCURRENCY_PUT_OFFSETS=5
+
+# Bundle lifecycle workers
+WORKER_CONCURRENCY_PLAN_BUNDLE=5
+WORKER_CONCURRENCY_PREPARE_BUNDLE=5
+WORKER_CONCURRENCY_POST_BUNDLE=3
+WORKER_CONCURRENCY_SEED_BUNDLE=3
+WORKER_CONCURRENCY_VERIFY_BUNDLE=3
+
+# Background workers
+WORKER_CONCURRENCY_UNBUNDLE_BDI=3
+WORKER_CONCURRENCY_CLEANUP_FS=1
+
+#############################################
+# Cache Configuration
+#############################################
+# TTL for in-flight cache (default: 60s)
+IN_FLIGHT_DATA_ITEM_TTL_SECS=60
+
+# Max items in local in-flight cache (default: 10000)
+IN_FLIGHT_CACHE_CAPACITY=10000
 EOF
 
 echo -e "${GREEN}✓${NC} .env file created successfully"

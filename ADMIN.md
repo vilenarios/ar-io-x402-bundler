@@ -353,16 +353,144 @@ BULL_BOARD_PORT=3002
 
 ```bash
 # Bundle size limits
-MAX_BUNDLE_SIZE=2147483648           # 2 GiB target bundle size
-MAX_DATA_ITEM_SIZE=4294967296        # 4 GiB max upload size
+MAX_BUNDLE_SIZE=10485760             # 10 MB target bundle size (default)
+MAX_DATA_ITEM_SIZE=10737418240       # 10 GiB max upload size
 MAX_DATA_ITEM_LIMIT=10000            # Max items per bundle
+OVERDUE_DATA_ITEM_THRESHOLD_MS=600000 # 10 minutes max wait time
 
 # Free upload limit (for testing)
-FREE_UPLOAD_LIMIT=517120             # ~505 KiB
+FREE_UPLOAD_LIMIT=0                  # 0 = all uploads require payment
 
 # Database migrations
 MIGRATE_ON_STARTUP=true              # Auto-run migrations on startup
 ```
+
+#### HTTP Server Timeouts
+
+Configurable timeouts to support large file uploads and prevent connection issues:
+
+```bash
+# Request timeout (milliseconds)
+# How long to wait for a request to complete before timing out
+# For large file uploads (10 GiB @ 10 MB/s = ~1000 seconds), set high
+REQUEST_TIMEOUT_MS=600000            # 10 minutes (default)
+
+# Headers timeout (milliseconds)
+# Must be greater than REQUEST_TIMEOUT_MS to avoid race conditions
+HEADERS_TIMEOUT_MS=620000            # 10 minutes 20 seconds (default)
+
+# Keep-alive timeout (milliseconds)
+# How long to keep idle connections alive
+# Should be greater than load balancer/proxy timeout
+KEEP_ALIVE_TIMEOUT_MS=120000         # 2 minutes (default)
+```
+
+**When to adjust**:
+- Increase `REQUEST_TIMEOUT_MS` if uploads fail with timeout errors
+- Keep `HEADERS_TIMEOUT_MS` > `REQUEST_TIMEOUT_MS` (add 20 seconds)
+- Match `KEEP_ALIVE_TIMEOUT_MS` to your load balancer's idle timeout + 10 seconds
+
+#### Database Connection Pool
+
+Critical for high-throughput operations. Prevents "Knex: Timeout acquiring a connection" errors:
+
+```bash
+# Minimum number of connections to maintain (always connected)
+DB_POOL_MIN=10                       # Default: 10
+
+# Maximum number of concurrent database connections
+# Rule of thumb: max = (expected_concurrent_uploads * 2) + 10
+# For 100 uploads/sec: 100 * 2 + 10 = 210 (use 50 for safety margin)
+DB_POOL_MAX=50                       # Default: 50
+
+# How long to keep idle connections alive (milliseconds)
+# Lower = less resource usage, higher = faster response on burst traffic
+DB_POOL_IDLE_TIMEOUT_MS=30000        # Default: 30 seconds
+
+# How long to wait for an available connection before timing out (milliseconds)
+# Increase if you see timeout errors under load
+DB_POOL_ACQUIRE_TIMEOUT_MS=60000     # Default: 60 seconds
+
+# How long to wait when creating a new database connection (milliseconds)
+DB_POOL_CREATE_TIMEOUT_MS=30000      # Default: 30 seconds
+
+# How often to check for expired connections (milliseconds)
+DB_POOL_REAP_INTERVAL_MS=1000        # Default: 1 second
+
+# Retry interval when connection creation fails (milliseconds)
+DB_POOL_CREATE_RETRY_INTERVAL_MS=200 # Default: 200ms
+```
+
+**Scaling guidelines**:
+- **Low traffic** (< 10 uploads/sec): `DB_POOL_MAX=50` (default)
+- **Medium traffic** (10-50 uploads/sec): `DB_POOL_MAX=100`
+- **High traffic** (50-100 uploads/sec): `DB_POOL_MAX=200`
+- **Very high traffic** (100+ uploads/sec): `DB_POOL_MAX=300+`
+
+**Troubleshooting**:
+- If you see "Knex: Timeout acquiring a connection", increase `DB_POOL_MAX`
+- If database is overwhelmed, decrease `DB_POOL_MAX` or add read replicas
+
+#### Worker Concurrency
+
+Control how many jobs each BullMQ worker processes simultaneously:
+
+```bash
+# Upload processing workers (high concurrency = better throughput)
+WORKER_CONCURRENCY_NEW_DATA_ITEM=10      # Process data item uploads
+WORKER_CONCURRENCY_OPTICAL_POST=10       # AR.IO Gateway optical caching
+WORKER_CONCURRENCY_PUT_OFFSETS=5         # Write data item offsets
+
+# Bundle lifecycle workers
+WORKER_CONCURRENCY_PLAN_BUNDLE=5         # Plan bundle jobs
+WORKER_CONCURRENCY_PREPARE_BUNDLE=5      # Assemble bundles from items
+WORKER_CONCURRENCY_POST_BUNDLE=3         # Post bundles to Arweave
+WORKER_CONCURRENCY_SEED_BUNDLE=3         # Seed bundles to gateways
+WORKER_CONCURRENCY_VERIFY_BUNDLE=3       # Verify bundle posting
+
+# Background workers
+WORKER_CONCURRENCY_UNBUNDLE_BDI=3        # Extract nested bundles
+WORKER_CONCURRENCY_CLEANUP_FS=1          # Filesystem cleanup
+```
+
+**Scaling guidelines**:
+- **Low traffic** (< 20 uploads/sec): Use defaults
+- **Medium traffic** (20-50 uploads/sec): Double upload workers (`NEW_DATA_ITEM=20`, `OPTICAL_POST=20`)
+- **High traffic** (50-100 uploads/sec): Quadruple upload workers + increase bundle workers
+- **Very high traffic** (100+ uploads/sec): Consider horizontal scaling (multiple worker containers)
+
+**Resource impact**:
+- Higher concurrency = more CPU + memory + database connections
+- Each active job may use 1-2 database connections
+- Total DB connections needed ≈ sum of all concurrent jobs across all workers
+
+**Example high-traffic configuration**:
+```bash
+# For 100+ uploads/sec
+WORKER_CONCURRENCY_NEW_DATA_ITEM=40
+WORKER_CONCURRENCY_PLAN_BUNDLE=10
+WORKER_CONCURRENCY_PREPARE_BUNDLE=10
+WORKER_CONCURRENCY_POST_BUNDLE=5
+WORKER_CONCURRENCY_OPTICAL_POST=40
+DB_POOL_MAX=200  # Adjust DB pool accordingly
+```
+
+#### Cache Configuration
+
+In-flight cache prevents duplicate uploads and provides temporary data storage:
+
+```bash
+# TTL for in-flight cache (how long to remember recent uploads)
+IN_FLIGHT_DATA_ITEM_TTL_SECS=60         # Default: 60 seconds
+
+# Max items in local in-flight cache
+IN_FLIGHT_CACHE_CAPACITY=10000          # Default: 10,000 items
+```
+
+**When to adjust**:
+- Increase `IN_FLIGHT_DATA_ITEM_TTL_SECS` if duplicate uploads happen within minutes
+- Increase `IN_FLIGHT_CACHE_CAPACITY` if you have very high upload rates (>100/sec)
+- These settings affect memory usage (each cached item ~1-2 KB)
 
 ---
 
@@ -1355,27 +1483,171 @@ docker-compose up -d
 
 ### Performance Issues
 
+#### Problem: Slow upload processing / High upload latency
+
+**Symptoms**:
+- Long queue wait times for new-data-item jobs
+- Uploads taking minutes instead of seconds
+- Bull Board shows many "waiting" jobs
+
+**Solutions**:
+
+1. **Increase upload worker concurrency**:
+   ```bash
+   # Edit .env
+   WORKER_CONCURRENCY_NEW_DATA_ITEM=20  # Increase from 10 to 20
+   WORKER_CONCURRENCY_OPTICAL_POST=20   # Double optical caching
+
+   # Restart workers
+   docker-compose restart workers
+   ```
+
+2. **Increase database connection pool**:
+   ```bash
+   # Edit .env - Required when increasing worker concurrency
+   DB_POOL_MAX=100  # Increase from 50 to 100
+
+   # Restart bundler and workers
+   docker-compose restart bundler workers
+   ```
+
+3. **Check if database connection pool is exhausted**:
+   ```sql
+   -- Check current connections
+   SELECT count(*) FROM pg_stat_activity WHERE datname = 'bundler_lite';
+
+   -- If close to DB_POOL_MAX, increase the limit
+   ```
+
+4. **Monitor worker performance**:
+   ```bash
+   # View worker logs to identify slow jobs
+   docker-compose logs -f workers
+
+   # Check Bull Board for job timing
+   # http://localhost:3002/admin/queues
+   ```
+
+#### Problem: "Knex: Timeout acquiring a connection" errors
+
+**Symptoms**:
+```
+Error: Knex: Timeout acquiring a connection. The pool is probably full.
+```
+
+**Root Cause**: Database connection pool exhausted under load
+
+**Solutions**:
+
+1. **Immediately increase DB pool size**:
+   ```bash
+   # Edit .env
+   DB_POOL_MAX=100  # Or higher based on traffic
+   DB_POOL_ACQUIRE_TIMEOUT_MS=120000  # Increase timeout to 2 minutes
+
+   # Restart services
+   docker-compose restart bundler workers
+   ```
+
+2. **Calculate required pool size**:
+   ```bash
+   # Formula: DB_POOL_MAX = (concurrent_uploads * 2) + (worker_concurrency_sum) + 10
+
+   # Example for 50 concurrent uploads:
+   # concurrent_uploads = 50
+   # worker_concurrency_sum = 10+10+5+5+5+3+3+3+3+1 = 48
+   # DB_POOL_MAX = (50 * 2) + 48 + 10 = 158
+   # Round up to: DB_POOL_MAX=200
+   ```
+
+3. **Monitor connection usage**:
+   ```sql
+   -- View current connections by state
+   SELECT state, count(*)
+   FROM pg_stat_activity
+   WHERE datname = 'bundler_lite'
+   GROUP BY state;
+
+   -- If "idle" connections are high, you can reduce DB_POOL_MAX
+   -- If "active" connections hit DB_POOL_MAX, increase it
+   ```
+
+4. **Verify PostgreSQL max_connections**:
+   ```bash
+   # PostgreSQL has its own connection limit (default: 100)
+   docker-compose exec postgres psql -U postgres -c "SHOW max_connections;"
+
+   # If DB_POOL_MAX > max_connections, PostgreSQL will reject connections
+   # Either increase PostgreSQL max_connections or reduce DB_POOL_MAX
+   ```
+
+#### Problem: Upload timeouts / Request timeouts
+
+**Symptoms**:
+```
+Error: Request timeout
+Error: socket hang up
+502 Bad Gateway from nginx
+```
+
+**Solutions**:
+
+1. **Increase HTTP server timeouts**:
+   ```bash
+   # Edit .env - For large file uploads
+   REQUEST_TIMEOUT_MS=1200000    # 20 minutes (was 10)
+   HEADERS_TIMEOUT_MS=1220000    # Must be > REQUEST_TIMEOUT_MS
+
+   # Restart bundler
+   docker-compose restart bundler
+   ```
+
+2. **Check nginx timeout (if using reverse proxy)**:
+   ```nginx
+   # In nginx config
+   proxy_read_timeout 1200s;      # Match REQUEST_TIMEOUT_MS
+   proxy_connect_timeout 75s;
+   client_max_body_size 10G;
+   ```
+
+3. **Monitor upload timing**:
+   ```bash
+   # Test upload with timing
+   time curl -X POST "http://localhost:3001/v1/tx" \
+     -H "Content-Type: application/octet-stream" \
+     --data-binary @large-file.bin
+   ```
+
 #### Problem: Slow bundle processing
 
 **Symptoms**: Long queue wait times, bundles not posting
 
 **Solutions**:
 
-1. **Increase worker concurrency**:
-   Edit `src/jobs/allWorkers.ts` and increase concurrency values
-
-2. **Scale workers**:
+1. **Increase bundle worker concurrency**:
    ```bash
-   # Docker
-   docker-compose up -d --scale workers=3
+   # Edit .env
+   WORKER_CONCURRENCY_PLAN_BUNDLE=10      # Increase from 5
+   WORKER_CONCURRENCY_PREPARE_BUNDLE=10   # Increase from 5
+   WORKER_CONCURRENCY_POST_BUNDLE=5       # Increase from 3
+   WORKER_CONCURRENCY_VERIFY_BUNDLE=5     # Increase from 3
 
-   # PM2
-   pm2 scale upload-workers +2
+   # Restart workers
+   docker-compose restart workers
+   ```
+
+2. **Scale workers horizontally** (Docker):
+   ```bash
+   # Run multiple worker containers
+   docker-compose up -d --scale workers=3
    ```
 
 3. **Check Arweave node connectivity**:
    ```bash
    curl https://arweave.net/info
+
+   # If slow, try different gateway
+   ARWEAVE_GATEWAY=https://arweave-node.example.com
    ```
 
 4. **Monitor database performance**:
@@ -1389,21 +1661,90 @@ docker-compose up -d
 
 #### Problem: High memory usage
 
-**Solution**: Adjust Node.js memory limits
+**Symptoms**:
+- Out of memory errors
+- Process crashes with heap errors
+- Docker containers restarting
+
+**Solutions**:
+
+1. **Adjust Node.js memory limits**:
+   ```bash
+   # Docker: Edit docker-compose.yml
+   services:
+     bundler:
+       environment:
+         NODE_OPTIONS: "--max-old-space-size=4096"  # 4GB
+     workers:
+       environment:
+         NODE_OPTIONS: "--max-old-space-size=4096"
+
+   # PM2: Edit ecosystem.config.js
+   {
+     name: 'upload-api',
+     node_args: '--max-old-space-size=4096',
+     // ...
+   }
+   ```
+
+2. **Reduce worker concurrency** (if memory-constrained):
+   ```bash
+   # Edit .env - Lower values use less memory
+   WORKER_CONCURRENCY_NEW_DATA_ITEM=5
+   WORKER_CONCURRENCY_PREPARE_BUNDLE=3
+   ```
+
+3. **Reduce in-flight cache size**:
+   ```bash
+   # Edit .env
+   IN_FLIGHT_CACHE_CAPACITY=5000  # Reduce from 10000
+   ```
+
+4. **Monitor memory usage**:
+   ```bash
+   # Docker
+   docker stats bundler-lite-service bundler-lite-workers
+
+   # PM2
+   pm2 monit
+   ```
+
+#### Performance Tuning Quick Reference
+
+**For high-traffic deployments (100+ uploads/sec)**:
 
 ```bash
-# Docker: Edit docker-compose.yml
-services:
-  bundler:
-    environment:
-      NODE_OPTIONS: "--max-old-space-size=4096"  # 4GB
+# HTTP Server
+REQUEST_TIMEOUT_MS=600000
+HEADERS_TIMEOUT_MS=620000
+KEEP_ALIVE_TIMEOUT_MS=120000
 
-# PM2: Edit ecosystem.config.js
-{
-  name: 'upload-api',
-  node_args: '--max-old-space-size=4096',
-  // ...
-}
+# Database Pool (critical!)
+DB_POOL_MIN=20
+DB_POOL_MAX=300
+DB_POOL_ACQUIRE_TIMEOUT_MS=120000
+
+# Worker Concurrency (aggressive)
+WORKER_CONCURRENCY_NEW_DATA_ITEM=40
+WORKER_CONCURRENCY_OPTICAL_POST=40
+WORKER_CONCURRENCY_PLAN_BUNDLE=10
+WORKER_CONCURRENCY_PREPARE_BUNDLE=10
+WORKER_CONCURRENCY_POST_BUNDLE=5
+WORKER_CONCURRENCY_PUT_OFFSETS=10
+
+# Cache
+IN_FLIGHT_CACHE_CAPACITY=20000
+IN_FLIGHT_DATA_ITEM_TTL_SECS=120
+
+# Resources
+NODE_OPTIONS="--max-old-space-size=8192"  # 8GB Node.js heap
+```
+
+**Restart after configuration changes**:
+```bash
+docker-compose restart bundler workers
+# Or
+pm2 restart all
 ```
 
 ---
