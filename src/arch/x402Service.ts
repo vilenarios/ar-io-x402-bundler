@@ -24,6 +24,19 @@ import { useFacilitator } from "x402/verify";
 import { X402NetworkConfig } from "../constants";
 import logger from "../logger";
 
+/**
+ * ERC-1271 magic value returned by isValidSignature when signature is valid
+ * bytes4(keccak256("isValidSignature(bytes32,bytes)"))
+ */
+const ERC1271_MAGIC_VALUE = "0x1626ba7e";
+
+/**
+ * ERC-1271 ABI for smart contract wallet signature verification
+ */
+const ERC1271_ABI = [
+  "function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)",
+];
+
 // Convert payment payload to Coinbase-compatible format
 function toCoinbaseFormat(data: any): any {
   if (typeof data !== "object" || data === null) {
@@ -511,7 +524,10 @@ export class X402Service {
   }
 
   /**
-   * Verify EIP-712 signature
+   * Verify EIP-712 signature - supports both EOA (ECDSA) and Smart Contract Wallets (ERC-1271)
+   *
+   * For EOA wallets: Uses standard ECDSA signature recovery
+   * For Smart Contract Wallets (e.g., Coinbase Smart Wallet): Uses ERC-1271 isValidSignature
    */
   private async verifyEIP712Signature(
     authorization: X402PaymentPayload["payload"]["authorization"],
@@ -547,28 +563,167 @@ export class X402Service {
         ],
       };
 
-      // Recover signer from signature
-      const recoveredAddress = ethers.verifyTypedData(
-        domain,
-        types,
-        authorization,
-        signature
-      );
+      // First, try standard EOA (ECDSA) signature verification
+      try {
+        const recoveredAddress = ethers.verifyTypedData(
+          domain,
+          types,
+          authorization,
+          signature
+        );
 
-      // Check signer matches 'from' address
-      const isValid =
-        recoveredAddress.toLowerCase() === authorization.from.toLowerCase();
+        // Check signer matches 'from' address
+        const isValid =
+          recoveredAddress.toLowerCase() === authorization.from.toLowerCase();
 
-      logger.debug("EIP-712 signature verification", {
+        if (isValid) {
+          logger.debug("EIP-712 EOA signature verification succeeded", {
+            from: authorization.from,
+            recoveredAddress,
+          });
+          return true;
+        }
+
+        // Recovered address doesn't match - might be a smart contract wallet
+        logger.debug("ECDSA recovery didn't match from address, trying ERC-1271", {
+          from: authorization.from,
+          recoveredAddress,
+        });
+      } catch (ecdsaError: any) {
+        // ECDSA verification failed - this is expected for smart contract wallets
+        // Common error: "invalid raw signature length" for WebAuthn/passkey signatures
+        logger.debug("ECDSA signature verification failed, trying ERC-1271", {
+          error: ecdsaError.shortMessage || ecdsaError.message,
+          from: authorization.from,
+        });
+      }
+
+      // Try ERC-1271 smart contract wallet verification
+      return await this.verifyERC1271Signature(
         authorization,
         signature,
-        recoveredAddress,
+        domain,
+        types,
+        networkConfig,
+        requirements.network
+      );
+    } catch (error) {
+      logger.error("EIP-712 signature verification failed", { error });
+      return false;
+    }
+  }
+
+  /**
+   * Verify signature using ERC-1271 isValidSignature on a smart contract wallet
+   *
+   * This supports smart contract wallets like:
+   * - Coinbase Smart Wallet (uses WebAuthn/passkeys)
+   * - Safe (Gnosis Safe)
+   * - Argent
+   * - Other ERC-4337 account abstraction wallets
+   */
+  private async verifyERC1271Signature(
+    authorization: X402PaymentPayload["payload"]["authorization"],
+    signature: string,
+    domain: ethers.TypedDataDomain,
+    types: Record<string, ethers.TypedDataField[]>,
+    networkConfig: X402NetworkConfig,
+    networkName: string
+  ): Promise<boolean> {
+    try {
+      // Get provider for the specific network, falling back to creating a temporary one
+      let provider = this.providers.get(networkName);
+
+      if (!provider) {
+        // Try alternative network names (e.g., "base" vs "base-mainnet")
+        if (networkName === "base") {
+          provider = this.providers.get("base-mainnet");
+        } else if (networkName === "base-mainnet") {
+          provider = this.providers.get("base");
+        }
+      }
+
+      if (!provider) {
+        // Create a temporary provider for this verification
+        logger.debug("Creating temporary provider for ERC-1271 verification", {
+          network: networkName,
+          rpcUrl: networkConfig.rpcUrl,
+        });
+        provider = new ethers.JsonRpcProvider(networkConfig.rpcUrl);
+      }
+
+      return await this.callERC1271IsValidSignature(
+        provider,
+        authorization,
+        signature,
+        domain,
+        types
+      );
+    } catch (error: any) {
+      logger.error("ERC-1271 signature verification failed", {
+        error: error.message,
+        from: authorization.from,
+        network: networkName,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Call the ERC-1271 isValidSignature function on a smart contract wallet
+   */
+  private async callERC1271IsValidSignature(
+    provider: ethers.JsonRpcProvider,
+    authorization: X402PaymentPayload["payload"]["authorization"],
+    signature: string,
+    domain: ethers.TypedDataDomain,
+    types: Record<string, ethers.TypedDataField[]>
+  ): Promise<boolean> {
+    const walletAddress = authorization.from;
+
+    // Check if the address is a contract
+    const code = await provider.getCode(walletAddress);
+    if (code === "0x" || code === "0x0") {
+      logger.debug("Address is not a contract, cannot use ERC-1271", {
+        walletAddress,
+      });
+      return false;
+    }
+
+    logger.info("Verifying signature via ERC-1271 smart contract wallet", {
+      walletAddress,
+      codeLength: code.length,
+    });
+
+    // Compute the EIP-712 typed data hash
+    const typedDataHash = ethers.TypedDataEncoder.hash(domain, types, authorization);
+
+    // Create contract instance
+    const walletContract = new ethers.Contract(walletAddress, ERC1271_ABI, provider);
+
+    try {
+      // Call isValidSignature(bytes32 hash, bytes signature) -> bytes4
+      const result = await walletContract.isValidSignature(typedDataHash, signature);
+
+      // Check if result matches the ERC-1271 magic value
+      const isValid = result.toLowerCase() === ERC1271_MAGIC_VALUE.toLowerCase();
+
+      logger.info("ERC-1271 isValidSignature result", {
+        walletAddress,
+        typedDataHash,
+        result,
+        expectedMagicValue: ERC1271_MAGIC_VALUE,
         isValid,
       });
 
       return isValid;
-    } catch (error) {
-      logger.error("EIP-712 signature verification failed", { error });
+    } catch (error: any) {
+      // Contract might not implement ERC-1271 or call reverted
+      logger.error("ERC-1271 isValidSignature call failed", {
+        walletAddress,
+        error: error.message,
+        reason: error.reason,
+      });
       return false;
     }
   }
