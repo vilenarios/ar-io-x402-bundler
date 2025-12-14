@@ -42,6 +42,9 @@ yarn test:unit
 # Integration tests (requires Docker infrastructure)
 yarn test:integration
 
+# Run a single test by name
+yarn test:unit --grep "test name pattern"
+
 # Type checking
 yarn typecheck
 ```
@@ -78,6 +81,17 @@ yarn docker:up
 
 # Stop all services
 yarn docker:down
+
+# View logs (all services)
+docker-compose logs -f
+
+# View logs for specific service
+docker-compose logs -f bundler    # API server
+docker-compose logs -f workers    # BullMQ workers
+docker-compose logs -f admin      # Admin dashboard
+
+# Check for errors in logs
+docker-compose logs 2>&1 | grep -iE "(error|warn|fail)"
 ```
 
 ## Deployment
@@ -122,6 +136,7 @@ export interface Architecture {
   database: Database;                  // PostgreSQL for data items
   dataItemOffsetsDB: DataItemOffsetsDB; // Offsets tracking
   cacheService: CacheService;          // Redis cache
+  pricingService: PricingService;      // Arweave pricing (AR/byte)
   x402Service: X402Service;            // x402 payment handling
   logger: winston.Logger;              // Winston logger
   arweaveGateway: ArweaveGateway;     // Arweave API client
@@ -151,6 +166,8 @@ All major services receive the `Architecture` instance via Koa middleware (`src/
 
 **Important**: The database name is `bundler_lite` (not `bundler`). This is configured in `.env` as `DB_DATABASE=bundler_lite`.
 
+**Connection Pool**: For high-throughput deployments, configure pool settings via `DB_POOL_MIN`, `DB_POOL_MAX`, `DB_POOL_ACQUIRE_TIMEOUT_MS` (see `.env.sample` for all options).
+
 ### Object Storage
 
 **S3-Compatible Storage** (`src/arch/objectStore.ts`, `src/arch/s3ObjectStore.ts`)
@@ -178,12 +195,9 @@ All major services receive the `Architecture` instance via Koa middleware (`src/
 2. **Payment Verification** (`src/routes/x402/x402Payment.ts`) - Verifies EIP-712 signature, settles USDC
 3. **Finalization** (`src/routes/x402/x402Finalize.ts`) - Fraud detection with ±5% byte count tolerance
 
-**Payment Modes**:
-- `payg` - Pay-as-you-go (pay only for this upload)
-- `topup` - Credit account balance (requires account - not used in lite version)
-- `hybrid` - Pay for upload + excess tops up balance (not used in lite version)
+**Payment Mode**: `payg` (pay-as-you-go) - pay only for each upload, no account balances.
 
-**Network Support**: Base Sepolia (testnet - default), Base Mainnet, Ethereum, Polygon
+**Network Support**: Base Mainnet (default), Base Sepolia (testnet), Ethereum, Polygon
 
 ### Job Queue System
 
@@ -214,6 +228,7 @@ Upload → new-data-item → plan-bundle → prepare-bundle → post-bundle → 
 - Redis-backed queues (separate Redis instance on port 6381)
 - Job retry with exponential backoff
 - Configuration in `src/arch/queues/config.ts`
+- Worker concurrency tunable via `WORKER_CONCURRENCY_*` env vars (see `.env.sample`)
 
 ### Bundle Packing Strategy
 
@@ -431,6 +446,7 @@ yarn build && yarn db:migrate
 ### Security
 - All ANS-104 data items are signature-verified
 - x402 payments use EIP-712 cryptographic signatures
+- ERC-1271 smart contract wallet signature verification supported
 - Fraud detection prevents byte-count manipulation (±5% tolerance)
 - Nonce-based replay attack prevention
 
