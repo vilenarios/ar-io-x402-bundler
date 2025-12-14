@@ -505,9 +505,11 @@ async function send402PaymentRequired(
   const resourceUrl = `${protocol}://${host}/v1/tx`;
 
   // Get network config for correct USDC address
-  const network = process.env.X402_NETWORK || "base-sepolia";
+  // Use first enabled network, defaulting to "base" (mainnet) if available
+  const enabledNetworks = ctx.state.x402Service.getEnabledNetworks();
+  const network = process.env.X402_NETWORK || enabledNetworks[0] || "base";
   const networkConfig = ctx.state.x402Service.getNetworkConfig(network);
-  const usdcAddress = networkConfig?.usdcAddress || process.env.USDC_CONTRACT_ADDRESS || "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
+  const usdcAddress = networkConfig?.usdcAddress || process.env.USDC_CONTRACT_ADDRESS || "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
 
   // Get x402 payment requirements
   const paymentRequirements = {
@@ -517,7 +519,7 @@ async function send402PaymentRequired(
     resource: resourceUrl,
     description: `Upload ${estimatedDataItemSize} bytes to Arweave via AR.IO Bundler`,
     mimeType: mimeType || "application/octet-stream",
-    payTo: process.env.ETHEREUM_ADDRESS || process.env.BASE_ETH_ADDRESS || "",
+    payTo: process.env.X402_PAYMENT_ADDRESS || process.env.ETHEREUM_ADDRESS || process.env.BASE_ETH_ADDRESS || "",
     maxTimeoutSeconds: 3600,
     asset: usdcAddress,
     extra: {
