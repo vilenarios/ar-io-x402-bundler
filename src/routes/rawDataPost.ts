@@ -19,7 +19,7 @@ import { Readable } from "stream";
 
 import { enqueue } from "../arch/queues";
 import { InMemoryDataItem } from "../bundles/streamingDataItem";
-import { dataCaches, fastFinalityIndexes, jobLabels } from "../constants";
+import { dataCaches, fastFinalityIndexes, freeUploadLimitBytes, jobLabels } from "../constants";
 import { KoaContext } from "../server";
 import { W } from "../types/winston";
 import { fromB64Url, jwkToPublicArweaveAddress } from "../utils/base64";
@@ -71,183 +71,225 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
   const paymentHeaderValue = ctx.headers["x-payment"] as string | undefined;
   const contentLengthHeader = ctx.headers["content-length"];
 
+  // Track if this is a free upload (no payment required)
+  let isFreeUpload = false;
+
   if (!paymentHeaderValue) {
-    // No payment provided - return 402 Payment Required
-    return await send402PaymentRequired(
-      ctx,
-      parsedRequest.data.length,
-      parsedRequest.contentType,
-      parsedRequest.tags
-    );
+    // Check if upload qualifies for free tier
+    if (freeUploadLimitBytes > 0 && parsedRequest.data.length > 0 && parsedRequest.data.length <= freeUploadLimitBytes) {
+      // Free upload - proceed without payment
+      logger.info("Raw upload qualifies for free tier - proceeding without payment", {
+        dataSize: parsedRequest.data.length,
+        freeUploadLimitBytes,
+      });
+      isFreeUpload = true;
+      // Fall through to data item creation (without payment)
+    } else {
+      // No payment provided and not eligible for free tier - return 402 Payment Required
+      logger.info("Raw upload requires payment - returning 402", {
+        dataSize: parsedRequest.data.length,
+        freeUploadLimitBytes,
+        eligibleForFree: freeUploadLimitBytes > 0 && parsedRequest.data.length <= freeUploadLimitBytes,
+      });
+      return await send402PaymentRequired(
+        ctx,
+        parsedRequest.data.length,
+        parsedRequest.contentType,
+        parsedRequest.tags
+      );
+    }
   }
 
-  if (!contentLengthHeader) {
+  if (!isFreeUpload && !contentLengthHeader) {
     return errorResponse(ctx, {
       errorMessage: "Content-Length header is required when providing payment",
       status: 400,
     });
   }
 
-  // Parse x402 payment header to extract payer and payment details
-  let payerAddress: string;
+  // Parse x402 payment header to extract payer and payment details (only if not free upload)
+  let payerAddress: string | undefined;
   let paymentPayload: any;
-  try {
-    paymentPayload = JSON.parse(Buffer.from(paymentHeaderValue, "base64").toString("utf8"));
-    const authorization = paymentPayload.payload?.authorization;
-    payerAddress = authorization?.from;
+  let settlement: any;
+  let paymentId: string | undefined;
 
-    if (!payerAddress) {
-      throw new Error("Payer address not found in payment header");
+  if (!isFreeUpload) {
+    try {
+      paymentPayload = JSON.parse(Buffer.from(paymentHeaderValue!, "base64").toString("utf8"));
+      const authorization = paymentPayload.payload?.authorization;
+      payerAddress = authorization?.from;
+
+      if (!payerAddress) {
+        throw new Error("Payer address not found in payment header");
+      }
+
+      logger.info("Parsed x402 payment header", {
+        payerAddress,
+        network: paymentPayload.network,
+        value: authorization.value,
+      });
+    } catch (error) {
+      logger.error("Failed to parse payment header", { error });
+      return errorResponse(ctx, {
+        errorMessage: "Invalid payment header format",
+        status: 400,
+      });
     }
 
-    logger.info("Parsed x402 payment header", {
-      payerAddress,
-      network: paymentPayload.network,
-      value: authorization.value,
+    // Calculate pricing for the upload
+    // Import estimation function
+    const { estimateDataItemSize } = await import("../utils/createDataItem");
+
+    // Count tags: user tags + 7 system tags for x402
+    // System tags: Bundler, Upload-Type, Payer-Address, X402-TX-Hash, X402-Payment-ID, X402-Network, Upload-Timestamp
+    const userTagCount = parsedRequest.tags?.length || 0;
+    const systemTagCount = 7; // x402 system tags
+    const contentTypeTagCount = parsedRequest.contentType ? 1 : 0;
+    const totalTagCount = userTagCount + systemTagCount + contentTypeTagCount;
+
+    // Estimate final data item size (raw data + ANS-104 overhead with accurate tag count)
+    const estimatedDataItemSize = estimateDataItemSize(parsedRequest.data.length, totalTagCount);
+
+    logger.info("Calculating pricing for x402 upload", {
+      rawDataSize: parsedRequest.data.length,
+      userTagCount,
+      systemTagCount,
+      totalTagCount,
+      estimatedDataItemSize,
     });
-  } catch (error) {
-    logger.error("Failed to parse payment header", { error });
-    return errorResponse(ctx, {
-      errorMessage: "Invalid payment header format",
-      status: 400,
-    });
-  }
 
-  // Calculate pricing for the upload
-  // Import estimation function
-  const { estimateDataItemSize } = await import("../utils/createDataItem");
-
-  // Count tags: user tags + 7 system tags for x402
-  // System tags: Bundler, Upload-Type, Payer-Address, X402-TX-Hash, X402-Payment-ID, X402-Network, Upload-Timestamp
-  const userTagCount = parsedRequest.tags?.length || 0;
-  const systemTagCount = 7; // x402 system tags
-  const contentTypeTagCount = parsedRequest.contentType ? 1 : 0;
-  const totalTagCount = userTagCount + systemTagCount + contentTypeTagCount;
-
-  // Estimate final data item size (raw data + ANS-104 overhead with accurate tag count)
-  const estimatedDataItemSize = estimateDataItemSize(parsedRequest.data.length, totalTagCount);
-
-  logger.info("Calculating pricing for x402 upload", {
-    rawDataSize: parsedRequest.data.length,
-    userTagCount,
-    systemTagCount,
-    totalTagCount,
-    estimatedDataItemSize,
-  });
-
-  // Get Winston cost from Arweave gateway
-  const winstonCost = await ctx.state.arweaveGateway.getWinstonPriceForByteCount(
-    estimatedDataItemSize
-  );
-
-  // Apply bundler fee (profit margin on top of Arweave costs)
-  const { x402FeePercent } = await import("../constants");
-  const winstonWithFee = Math.ceil(Number(winstonCost) * (1 + x402FeePercent / 100));
-
-  // Convert Winston to USDC (using singleton for caching)
-  const { x402PricingOracle } = await import("../utils/x402Pricing");
-  const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithFee.toString()));
-
-  // Build payment requirements for verification
-  const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
-  const networkConfig = ctx.state.x402Service.getNetworkConfig(paymentPayload.network);
-
-  if (!networkConfig) {
-    return errorResponse(ctx, {
-      errorMessage: `Network ${paymentPayload.network} is not configured`,
-      status: 400,
-    });
-  }
-
-  const requirements = {
-    scheme: "exact",
-    network: paymentPayload.network,
-    maxAmountRequired: usdcAmountRequired,
-    resource: `${uploadServicePublicUrl}/v1/tx`,
-    description: `Upload ${estimatedDataItemSize} bytes to Arweave via AR.IO Bundler`,
-    mimeType: parsedRequest.contentType || "application/octet-stream",
-    asset: networkConfig.usdcAddress,
-    payTo: paymentPayload.payload.authorization.to,
-    maxTimeoutSeconds: 3600,
-    extra: {
-      name: "USD Coin",
-      version: "2",
-    },
-  };
-
-  // Verify and settle x402 payment
-  logger.info("Settling x402 payment", {
-    payerAddress,
-    network: paymentPayload.network,
-    usdcAmountRequired,
-  });
-
-  let settlement;
-  try {
-    // Verify payment first
-    const verification = await ctx.state.x402Service.verifyPayment(
-      paymentHeaderValue,
-      requirements
+    // Get Winston cost from Arweave gateway
+    const winstonCost = await ctx.state.arweaveGateway.getWinstonPriceForByteCount(
+      estimatedDataItemSize
     );
 
-    if (!verification.isValid) {
+    // Apply bundler fee (profit margin on top of Arweave costs)
+    const { x402FeePercent } = await import("../constants");
+    const winstonWithFee = Math.ceil(Number(winstonCost) * (1 + x402FeePercent / 100));
+
+    // Convert Winston to USDC (using singleton for caching)
+    const { x402PricingOracle } = await import("../utils/x402Pricing");
+    const usdcAmountRequired = await x402PricingOracle.getUSDCForWinston(W(winstonWithFee.toString()));
+
+    // Build payment requirements for verification
+    const uploadServicePublicUrl = process.env.UPLOAD_SERVICE_PUBLIC_URL || "http://localhost:3001";
+    const networkConfig = ctx.state.x402Service.getNetworkConfig(paymentPayload.network);
+
+    if (!networkConfig) {
       return errorResponse(ctx, {
-        errorMessage: verification.invalidReason || "Payment verification failed",
+        errorMessage: `Network ${paymentPayload.network} is not configured`,
+        status: 400,
+      });
+    }
+
+    const requirements = {
+      scheme: "exact",
+      network: paymentPayload.network,
+      maxAmountRequired: usdcAmountRequired,
+      resource: `${uploadServicePublicUrl}/v1/tx`,
+      description: `Upload ${estimatedDataItemSize} bytes to Arweave via AR.IO Bundler`,
+      mimeType: parsedRequest.contentType || "application/octet-stream",
+      asset: networkConfig.usdcAddress,
+      payTo: paymentPayload.payload.authorization.to,
+      maxTimeoutSeconds: 3600,
+      extra: {
+        name: "USD Coin",
+        version: "2",
+      },
+    };
+
+    // Verify and settle x402 payment
+    logger.info("Settling x402 payment", {
+      payerAddress,
+      network: paymentPayload.network,
+      usdcAmountRequired,
+    });
+
+    try {
+      // Verify payment first
+      const verification = await ctx.state.x402Service.verifyPayment(
+        paymentHeaderValue!,
+        requirements
+      );
+
+      if (!verification.isValid) {
+        return errorResponse(ctx, {
+          errorMessage: verification.invalidReason || "Payment verification failed",
+          status: 402,
+        });
+      }
+
+      // Settle payment on-chain
+      settlement = await ctx.state.x402Service.settlePayment(
+        paymentHeaderValue!,
+        requirements
+      );
+
+      if (!settlement.success) {
+        throw new Error(settlement.error || "Payment settlement failed");
+      }
+
+      logger.info("X402 payment settled successfully", {
+        txHash: settlement.transactionHash,
+        network: paymentPayload.network,
+      });
+    } catch (error) {
+      logger.error("X402 payment failed", { error });
+      return errorResponse(ctx, {
+        errorMessage: error instanceof Error ? error.message : "Payment failed",
         status: 402,
       });
     }
 
-    // Settle payment on-chain
-    settlement = await ctx.state.x402Service.settlePayment(
-      paymentHeaderValue,
-      requirements
-    );
-
-    if (!settlement.success) {
-      throw new Error(settlement.error || "Payment settlement failed");
-    }
-
-    logger.info("X402 payment settled successfully", {
-      txHash: settlement.transactionHash,
-      network: paymentPayload.network,
-    });
-  } catch (error) {
-    logger.error("X402 payment failed", { error });
-    return errorResponse(ctx, {
-      errorMessage: error instanceof Error ? error.message : "Payment failed",
-      status: 402,
-    });
+    // Generate payment ID for tracking
+    const { randomUUID } = await import("crypto");
+    paymentId = randomUUID();
   }
 
-  // Generate payment ID for tracking
-  const { randomUUID } = await import("crypto");
-  const paymentId = randomUUID();
-
-  // NOW create the data item with TX hash in tags
+  // Create the data item (with or without payment tags depending on isFreeUpload)
   let dataItem: DataItem;
   let rawDataItemWallet;
   try {
     rawDataItemWallet = await ctx.state.getRawDataItemWallet();
-    dataItem = await createDataItemFromRaw(
-      {
-        data: parsedRequest.data,
-        tags: parsedRequest.tags,
-        contentType: parsedRequest.contentType,
-        payerAddress,
-        x402Payment: {
-          txHash: settlement.transactionHash!,
-          paymentId,
-          network: paymentPayload.network,
-        },
-      },
-      rawDataItemWallet
-    );
 
-    logger.info("Created data item with x402 payment tags", {
-      dataItemId: dataItem.id,
-      txHash: settlement.transactionHash,
-      paymentId,
-    });
+    if (isFreeUpload) {
+      // Free upload - create data item without payment tags
+      dataItem = await createDataItemFromRaw(
+        {
+          data: parsedRequest.data,
+          tags: parsedRequest.tags,
+          contentType: parsedRequest.contentType,
+          // No payerAddress or x402Payment for free uploads
+        },
+        rawDataItemWallet
+      );
+
+      logger.info("Created free data item (no payment tags)", {
+        dataItemId: dataItem.id,
+      });
+    } else {
+      // Paid upload - create data item with payment tags
+      dataItem = await createDataItemFromRaw(
+        {
+          data: parsedRequest.data,
+          tags: parsedRequest.tags,
+          contentType: parsedRequest.contentType,
+          payerAddress,
+          x402Payment: {
+            txHash: settlement.transactionHash!,
+            paymentId: paymentId!,
+            network: paymentPayload.network,
+          },
+        },
+        rawDataItemWallet
+      );
+
+      logger.info("Created data item with x402 payment tags", {
+        dataItemId: dataItem.id,
+        txHash: settlement.transactionHash,
+        paymentId,
+      });
+    }
   } catch (error) {
     logger.error("Failed to create data item", { error });
     return errorResponse(ctx, {
@@ -285,24 +327,27 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
 
   const payloadContentType = parsedRequest.contentType || "application/octet-stream";
 
-  // Store x402 payment record in database (using singleton for caching)
-  const { x402PricingOracle: oracle } = await import("../utils/x402Pricing");
-  const wincPaid = await oracle.getWinstonForUSDC(paymentPayload.payload.authorization.value);
-  await ctx.state.database.insertX402Payment({
-    paymentId,
-    txHash: settlement.transactionHash!,
-    network: paymentPayload.network,
-    payerAddress,
-    usdcAmount: paymentPayload.payload.authorization.value,
-    wincAmount: wincPaid,
-    dataItemId: dataItem.id,
-    byteCount,
-  });
+  // Store x402 payment record in database (only for paid uploads)
+  let wincPaid = W(0); // Default for free uploads
+  if (!isFreeUpload) {
+    const { x402PricingOracle: oracle } = await import("../utils/x402Pricing");
+    wincPaid = await oracle.getWinstonForUSDC(paymentPayload.payload.authorization.value);
+    await ctx.state.database.insertX402Payment({
+      paymentId: paymentId!,
+      txHash: settlement.transactionHash!,
+      network: paymentPayload.network,
+      payerAddress: payerAddress!,
+      usdcAmount: paymentPayload.payload.authorization.value,
+      wincAmount: wincPaid,
+      dataItemId: dataItem.id,
+      byteCount,
+    });
 
-  logger.info("Stored x402 payment record", {
-    paymentId,
-    dataItemId: dataItem.id,
-  });
+    logger.info("Stored x402 payment record", {
+      paymentId,
+      dataItemId: dataItem.id,
+    });
+  }
 
   // Store the data item (same flow as signed uploads)
   try {
@@ -418,36 +463,54 @@ export async function handleRawDataUpload(ctx: KoaContext, rawBody: Buffer): Pro
   // Sign receipt with raw data item wallet (the actual signer of the data item)
   const signedReceipt = await signReceipt(unsignedReceipt, rawDataItemWallet);
 
-  // Build x402 payment response header
-  const x402PaymentResponse = {
-    paymentId,
-    transactionHash: settlement.transactionHash!,
-    network: paymentPayload.network,
-    mode: "payg", // x402 is always PAYG (no credit assignment)
-  };
-
   // Return success response
   ctx.status = 201;
-  ctx.set("X-Payment-Response", Buffer.from(JSON.stringify(x402PaymentResponse)).toString("base64"));
-  ctx.body = {
-    id: dataItem.id,
-    owner: jwkToPublicArweaveAddress(rawDataItemWallet), // Raw data item wallet address
-    payer: payerAddress, // The actual payer (tracked in Payer-Address tag)
-    dataCaches: unsignedReceipt.dataCaches,
-    fastFinalityIndexes: unsignedReceipt.fastFinalityIndexes,
-    receipt: signedReceipt,
-    x402Payment: x402PaymentResponse,
-  };
 
-  logger.info("Raw data upload completed successfully with x402 payment", {
-    dataItemId: dataItem.id,
-    x402PaymentId: paymentId,
-    x402TxHash: settlement.transactionHash,
-    x402Network: paymentPayload.network,
-    x402Mode: "payg",
-    payerAddress,
-    message: "Payment metadata stored in response. TX hash and payment ID available via x402Payment object",
-  });
+  if (isFreeUpload) {
+    // Free upload response - no payment info
+    ctx.body = {
+      id: dataItem.id,
+      owner: jwkToPublicArweaveAddress(rawDataItemWallet),
+      dataCaches: unsignedReceipt.dataCaches,
+      fastFinalityIndexes: unsignedReceipt.fastFinalityIndexes,
+      receipt: signedReceipt,
+      freeUpload: true,
+    };
+
+    logger.info("Raw data upload completed successfully (free upload)", {
+      dataItemId: dataItem.id,
+      byteCount,
+      freeUploadLimitBytes,
+    });
+  } else {
+    // Paid upload response - include payment info
+    const x402PaymentResponse = {
+      paymentId,
+      transactionHash: settlement.transactionHash!,
+      network: paymentPayload.network,
+      mode: "payg",
+    };
+
+    ctx.set("X-Payment-Response", Buffer.from(JSON.stringify(x402PaymentResponse)).toString("base64"));
+    ctx.body = {
+      id: dataItem.id,
+      owner: jwkToPublicArweaveAddress(rawDataItemWallet),
+      payer: payerAddress,
+      dataCaches: unsignedReceipt.dataCaches,
+      fastFinalityIndexes: unsignedReceipt.fastFinalityIndexes,
+      receipt: signedReceipt,
+      x402Payment: x402PaymentResponse,
+    };
+
+    logger.info("Raw data upload completed successfully with x402 payment", {
+      dataItemId: dataItem.id,
+      x402PaymentId: paymentId,
+      x402TxHash: settlement.transactionHash,
+      x402Network: paymentPayload.network,
+      x402Mode: "payg",
+      payerAddress,
+    });
+  }
 }
 
 /**

@@ -37,5 +37,6 @@ export function swaggerDocsJSON(ctx: KoaContext, next: Next) {
 
 export const swaggerDocs = koaSwagger({
   routePrefix: false,
-  swaggerOptions: { url: '/openapi.json' },
+  // Use relative URL so it works behind reverse proxies with path prefixes
+  swaggerOptions: { url: './openapi.json' },
 });
