@@ -12,86 +12,49 @@ AR.IO Bundler Lite is a lightweight Arweave ANS-104 bundler with x402 USDC payme
 
 ### Build & Run
 ```bash
-# Build TypeScript to JavaScript
-yarn build
-
-# Clean build artifacts
-yarn clean
-
-# Development mode with hot reload
-yarn dev
-
-# Production mode
-yarn start
-
-# Watch mode (rebuild on changes)
-yarn start:watch
-
-# Admin dashboard (port 3002)
-yarn admin
+yarn build          # Build TypeScript to JavaScript
+yarn clean          # Clean build artifacts
+yarn dev            # Development mode with hot reload
+yarn start          # Production mode
+yarn start:watch    # Watch mode (rebuild on changes)
+yarn admin          # Admin dashboard (port 3002)
 ```
 
 ### Testing
 ```bash
-# All tests
-yarn test
-
-# Unit tests only
-yarn test:unit
-
-# Integration tests (requires Docker infrastructure)
-yarn test:integration
-
-# Run a single test by name
-yarn test:unit --grep "test name pattern"
-
-# Type checking
-yarn typecheck
+yarn test                              # All tests
+yarn test:unit                         # Unit tests only
+yarn test:integration                  # Integration tests (requires Docker)
+yarn test:unit --grep "test name"      # Run single test by name
+yarn typecheck                         # Type checking
 ```
 
 ### Code Quality
 ```bash
-# Linting
-yarn lint
-yarn lint:fix
-
-# Formatting
-yarn format
-yarn format:check
+yarn lint           # Linting
+yarn lint:fix       # Auto-fix lint issues
+yarn format         # Format code
+yarn format:check   # Check formatting
 ```
 
 ### Database Operations
 ```bash
-# Run all migrations
-yarn db:migrate
-
-# Rollback last migration
-yarn db:migrate:rollback
-
-# Create new migration (creates .ts file in src/migrations/)
-yarn db:migrate:new migration_name
+yarn db:migrate                       # Run all migrations
+yarn db:migrate:rollback              # Rollback last migration
+yarn db:migrate:new migration_name    # Create new migration
 ```
 
-**Important**: Migration files are created in `src/migrations/` as `.ts` files. The build process compiles them to `lib/migrations/*.js`. The knexfile references the compiled JS migrations in `lib/migrations/`.
+**Important**: Migration files are created in `src/migrations/` as `.ts` files. The build process compiles them to `lib/migrations/*.js`. Always run `yarn build` before `yarn db:migrate`.
 
 ### Docker Infrastructure
 ```bash
-# Start infrastructure (PostgreSQL, Redis, MinIO)
-yarn docker:up
+yarn docker:up      # Start infrastructure (PostgreSQL, Redis, MinIO)
+yarn docker:down    # Stop all services
 
-# Stop all services
-yarn docker:down
-
-# View logs (all services)
-docker-compose logs -f
-
-# View logs for specific service
+# View logs
 docker-compose logs -f bundler    # API server
 docker-compose logs -f workers    # BullMQ workers
 docker-compose logs -f admin      # Admin dashboard
-
-# Check for errors in logs
-docker-compose logs 2>&1 | grep -iE "(error|warn|fail)"
 ```
 
 ## Deployment
@@ -103,8 +66,6 @@ cp .env.sample .env
 ./start-bundler.sh
 ```
 
-This starts everything: PostgreSQL, Redis (cache + queue), MinIO, Bundler API, Workers, and Admin Dashboard.
-
 **Services:**
 - Bundler API: `http://localhost:3001`
 - Admin Dashboard: `http://localhost:3002/admin/dashboard`
@@ -113,40 +74,15 @@ This starts everything: PostgreSQL, Redis (cache + queue), MinIO, Bundler API, W
 
 ### PM2 Deployment (Development)
 ```bash
-yarn docker:up     # Start infrastructure
-yarn build         # Compile TypeScript
-yarn db:migrate    # Run migrations
+yarn docker:up && yarn build && yarn db:migrate
 pm2 start ecosystem.config.js
 ```
-
-**PM2 Services** (defined in `ecosystem.config.js`):
-- `upload-api` - HTTP API server (2 cluster instances)
-- `upload-workers` - BullMQ job workers (all 11 queues)
-- `bull-board` - Admin dashboard and Bull Board UI
 
 ## Architecture Overview
 
 ### Dependency Injection Pattern
 
-The entire architecture uses a central `Architecture` interface (`src/arch/architecture.ts`) for dependency injection:
-
-```typescript
-export interface Architecture {
-  objectStore: ObjectStore;           // S3-compatible storage
-  database: Database;                  // PostgreSQL for data items
-  dataItemOffsetsDB: DataItemOffsetsDB; // Offsets tracking
-  cacheService: CacheService;          // Redis cache
-  pricingService: PricingService;      // Arweave pricing (AR/byte)
-  x402Service: X402Service;            // x402 payment handling
-  logger: winston.Logger;              // Winston logger
-  arweaveGateway: ArweaveGateway;     // Arweave API client
-  getArweaveWallet: () => Promise<JWKInterface>;
-  getRawDataItemWallet: () => Promise<JWKInterface>;
-  tracer?: Tracer;                     // OpenTelemetry tracing
-}
-```
-
-All major services receive the `Architecture` instance via Koa middleware (`src/middleware/architecture.ts`), enabling testability and modular component swapping.
+The entire architecture uses a central `Architecture` interface (`src/arch/architecture.ts`) for dependency injection. All major services receive this instance via Koa middleware (`src/middleware/architecture.ts`), enabling testability and modular component swapping.
 
 ### Database Layer
 
@@ -166,8 +102,6 @@ All major services receive the `Architecture` instance via Koa middleware (`src/
 
 **Important**: The database name is `bundler_lite` (not `bundler`). This is configured in `.env` as `DB_DATABASE=bundler_lite`.
 
-**Connection Pool**: For high-throughput deployments, configure pool settings via `DB_POOL_MIN`, `DB_POOL_MAX`, `DB_POOL_ACQUIRE_TIMEOUT_MS` (see `.env.sample` for all options).
-
 ### Object Storage
 
 **S3-Compatible Storage** (`src/arch/objectStore.ts`, `src/arch/s3ObjectStore.ts`)
@@ -181,23 +115,47 @@ All major services receive the `Architecture` instance via Koa middleware (`src/
 - `X402Service` (`src/arch/x402Service.ts`) - Verifies payments, settles USDC via facilitator
 - `X402PricingOracle` (`src/x402/x402PricingOracle.ts`) - Converts Winston (AR pricing) to USDC atomic units
 
-**Getting Price Quotes** (Two Methods):
-1. **Dedicated Pricing Endpoint** (`src/routes/x402/x402Price.ts`) - GET request returns 200 OK with payment requirements
-   - Example: `GET /v1/x402/price/3/0xAddress?bytes=1024`
-   - No data upload needed, just query parameters
-2. **Upload Endpoint Without Payment** (`src/routes/dataItemPost.ts`) - POST request returns 402 with payment requirements
-   - Example: `POST /v1/tx` with `Content-Length` header but no `X-PAYMENT` header
-   - Returns 402 Payment Required with full pricing details
-   - Pricing calculated from `Content-Length` header
-
 **Payment Flow**:
-1. **Get Price Quote** - Use either method above to get payment requirements
-2. **Payment Verification** (`src/routes/x402/x402Payment.ts`) - Verifies EIP-712 signature, settles USDC
-3. **Finalization** (`src/routes/x402/x402Finalize.ts`) - Fraud detection with ±5% byte count tolerance
+1. **Get Price Quote** - POST without `X-PAYMENT` header returns 402 with payment requirements
+2. **Create Payment** - Client creates EIP-712 USDC transfer signature
+3. **Submit with Payment** - POST with `X-PAYMENT` header (base64-encoded JSON)
+4. **Settlement** - Facilitator executes `transferWithAuthorization` on USDC contract
+5. **Fraud Detection** - Byte count verification with ±5% tolerance
 
 **Payment Mode**: `payg` (pay-as-you-go) - pay only for each upload, no account balances.
 
 **Network Support**: Base Mainnet (default), Base Sepolia (testnet), Ethereum, Polygon
+
+### Upload API
+
+The bundler supports two upload modes:
+
+**Signed Uploads** (`/v1/x402/upload/signed` or `/v1/tx`):
+- Client provides pre-signed ANS-104 data item
+- Supports Arweave (type 1), Ethereum (type 3), Solana (type 4) signatures
+
+**Unsigned Uploads** (`/v1/x402/upload/unsigned`):
+- Client sends raw data + optional tags
+- Server creates and signs ANS-104 data item using `RAW_DATA_ITEM_JWK_FILE` wallet
+- ALWAYS requires x402 payment (no whitelist exemption)
+- Supports binary upload with `X-Tag-*` headers or JSON envelope format
+- See `docs/UNSIGNED_UPLOAD_TECHNICAL_BRIEF.md` for implementation details
+
+**Request Formats for Unsigned**:
+```bash
+# Binary with header tags
+curl -X POST /v1/x402/upload/unsigned \
+  -H "Content-Type: image/png" \
+  -H "X-Tag-App-Name: MyApp" \
+  --data-binary @file.png
+
+# JSON envelope
+curl -X POST /v1/x402/upload/unsigned \
+  -H "Content-Type: application/json" \
+  -d '{"data":"<base64>","contentType":"image/png","tags":[{"name":"App-Name","value":"MyApp"}]}'
+```
+
+Enable with: `RAW_DATA_UPLOADS_ENABLED=true`
 
 ### Job Queue System
 
@@ -222,7 +180,6 @@ Upload → new-data-item → plan-bundle → prepare-bundle → post-bundle → 
 - `cleanup-fs` - Remove temporary filesystem artifacts
 - `put-offsets` - Write data item offset information
 - `finalize-upload` - Complete multipart upload flow
-- `seed` - Seeding job for initial data
 
 **Queue Configuration**:
 - Redis-backed queues (separate Redis instance on port 6381)
@@ -296,11 +253,6 @@ Upload → new-data-item → plan-bundle → prepare-bundle → post-bundle → 
 - `maxDataItemsPerBundle` - Max items per bundle (default: 10,000)
 - `freeUploadLimitBytes` - Free upload limit (default: ~505 KiB)
 
-**Arweave Configuration**:
-- `deadlineHeightIncrement` - Block height deadline (default: 200 blocks)
-- `gatewayUrl` - Arweave gateway for verification
-- `arweaveUploadNode` - Upload node for chunks (separate from gateway)
-
 **ANS-104 Signature Types**:
 - `signatureType: 1` - Arweave (RSA-PSS 4096-bit)
 - `signatureType: 3` - Ethereum (ECDSA secp256k1)
@@ -308,13 +260,12 @@ Upload → new-data-item → plan-bundle → prepare-bundle → post-bundle → 
 
 ### x402 Network Configuration
 
-Configured via environment variables or `X402_NETWORKS` JSON:
-- **Base Sepolia (testnet)** - Default, uses public facilitator (https://x402.org/facilitator)
-- **Base Mainnet** - Requires CDP credentials
-- **Ethereum Mainnet** - Supports USDC payments
-- **Polygon Mainnet** - Supports USDC payments
+Configured via `X402_*_ENABLED` and `X402_FACILITATORS_*` env vars:
+- **Base Mainnet** - Default enabled, requires CDP credentials for Coinbase facilitator
+- **Base Sepolia (testnet)** - Disabled by default, uses Mogami facilitator (no CDP needed)
+- **Ethereum/Polygon Mainnet** - Disabled, must configure facilitators to enable
 
-Each network has: `chainId`, `rpcUrl`, `usdcAddress`, `facilitatorUrls` (array for multi-facilitator fallback support)
+Each network config: `chainId`, `rpcUrl`, `usdcAddress`, `facilitatorUrls` (array for fallback)
 
 ## Code Navigation
 
@@ -324,28 +275,56 @@ Each network has: `chainId`, `rpcUrl`, `usdcAddress`, `facilitatorUrls` (array f
 - `src/jobs/allWorkers.ts` - BullMQ worker processes
 - `admin-server.js` - Admin dashboard server
 
-### Core Routes (`src/routes/`)
-- `dataItemPost.ts` - Upload endpoint (`POST /v1/tx`)
-- `rawDataPost.ts` - Raw data upload endpoint
+### API Routes (`src/router.ts`)
+
+All routes support both root and `/v1` prefix (e.g., `/tx` and `/v1/tx`).
+
+**Upload Endpoints (x402-only)**:
+- `POST /v1/x402/upload/signed` - Explicit signed ANS-104 data item upload
+- `POST /v1/x402/upload/unsigned` - Explicit unsigned raw data upload (server signs)
+- `POST /v1/tx` - Legacy endpoint with auto-detection (signed vs unsigned)
+
+**Pricing Endpoints**:
+- `GET /v1/x402/price/:signatureType/:address` - Legacy price quote
+- `GET /v1/price/x402/data-item/:token/:byteCount` - Turbo-style signed data item pricing
+- `GET /v1/price/x402/data/:token/:byteCount` - Turbo-style unsigned data pricing
+
+**Multipart Uploads**:
+- `GET /v1/chunks/:token/-1/-1` - Create multipart upload
+- `POST /v1/chunks/:token/:uploadId/:chunkOffset` - Upload chunk
+- `POST /v1/chunks/:token/:uploadId/-1` - Finalize upload
+
+**Status & Info**:
+- `GET /v1/tx/:id/status` - Data item status
+- `GET /v1/tx/:id/offsets` - Data item offsets
+- `GET /v1/info` - Service info
+- `GET /health` - Health check
+- `GET /bundler_metrics` - Prometheus metrics
+
+### Route Handlers (`src/routes/`)
+- `dataItemPost.ts` - Upload handlers (`signedDataItemRoute`, `unsignedDataItemRoute`, `dataItemRoute`)
+- `rawDataPost.ts` - Raw data processing utilities
 - `multiPartUploads.ts` - Multipart upload handling
-- `status.ts` - Data item status endpoint
-- `offsets.ts` - Data item offset endpoint
-- `info.ts` - Service info endpoint
+- `status.ts`, `offsets.ts`, `info.ts` - Status/info endpoints
 
 ### x402 Routes (`src/routes/x402/`)
-- `x402Price.ts` - Price quote endpoint (`GET /v1/x402/price/{signatureType}/{address}`)
-- `x402Payment.ts` - Payment verification endpoint
-- `x402Finalize.ts` - Payment finalization with fraud detection
+- `x402Price.ts` - Legacy price quote endpoint
+- `x402DataItemPrice.ts` - Turbo-style signed data item pricing
+- `x402RawDataPrice.ts` - Turbo-style unsigned data pricing
+- `x402Payment.ts` - Payment verification
+- `x402Finalize.ts` - Fraud detection with ±5% byte tolerance
+- `x402PricingHelpers.ts` - Shared pricing utilities
 
 ### Job Handlers (`src/jobs/`)
-All job handlers are in the `src/jobs/` directory, named by job type: `plan.ts`, `prepare.ts`, `post.ts`, `verify.ts`, etc.
+All job handlers named by type: `plan.ts`, `prepare.ts`, `post.ts`, `verify.ts`, `optical-post.ts`, etc.
 
-### Utilities (`src/utils/`)
-- `common.ts` - Common helper functions
+### Key Utilities (`src/utils/`)
+- `createDataItem.ts` - ANS-104 data item creation for unsigned uploads
+- `rawDataUtils.ts` - Request parsing, tag extraction from headers
 - `dataItemUtils.ts` - Data item storage/retrieval
 - `opticalUtils.ts` - AR.IO Gateway optimistic caching
 - `signReceipt.ts` - Receipt signing (JWK-based)
-- `x402Pricing.ts` - x402 pricing calculations
+- `x402Pricing.ts` - Winston ↔ USDC conversion
 
 ## Development Patterns
 
@@ -372,45 +351,6 @@ All job handlers are in the `src/jobs/` directory, named by job type: `plan.ts`,
 - Migrations compile to `lib/migrations/*.js`
 - Run on startup if `MIGRATE_ON_STARTUP=true`
 - **Important**: Only load `.js` migration files (TypeScript files are excluded via filter)
-
-## Common Development Tasks
-
-### Running Locally
-1. Start infrastructure: `yarn docker:up`
-2. Configure `.env` (copy from `.env.sample`)
-3. Set `ARWEAVE_WALLET_FILE` to **absolute path** of Arweave wallet
-4. Set `X402_PAYMENT_ADDRESS` to your Ethereum address
-5. Run migrations: `yarn db:migrate`
-6. Build: `yarn build`
-7. Start bundler: `yarn start` (port 3001)
-8. Start admin dashboard: `yarn admin` (port 3002)
-
-### Admin Dashboard
-- Dashboard: `http://localhost:3002/admin/dashboard`
-- Queue Monitor: `http://localhost:3002/admin/queues` (Bull Board)
-- Authentication: Basic Auth (`ADMIN_USERNAME`/`ADMIN_PASSWORD` from .env)
-- Real-time stats: uploads, x402 payments, bundles, system health
-
-### Debugging x402 Payments
-- Check payment records: `SELECT * FROM x402_payments ORDER BY created_at DESC;`
-- Check payment by data item: `SELECT * FROM x402_payments WHERE upload_id = 'data_item_id';`
-- Verify fraud detection: Check `actual_byte_count` vs `declared_byte_count` in `x402_payments` table
-
-### Adding New Migrations
-```bash
-# Create new migration file
-yarn db:migrate:new add_new_feature
-
-# Edit the generated file in src/migrations/
-# Run migration
-yarn build && yarn db:migrate
-```
-
-### Monitoring BullMQ Jobs
-- Access Bull Board: `http://localhost:3002/admin/queues`
-- View job status: waiting, active, completed, failed
-- Retry failed jobs manually
-- Inspect job data and error logs
 
 ## Common Issues
 
@@ -456,15 +396,16 @@ yarn build && yarn db:migrate
 - S3-compatible storage for distributed data access
 - Redis caching reduces database load
 
-### Data Integrity
-- Arweave permanence guarantees immutable storage
-- Bundle verification confirms on-chain posting
-- Data item offsets tracked for retrieval
-- Backup data items stored separately in S3
-
 ### Redis Architecture
 Two separate Redis instances:
 - **Cache Redis** (port 6379) - Used by `CacheService` for caching
 - **Queue Redis** (port 6381) - Used by BullMQ for job queues
 
 This separation prevents cache eviction from affecting job queue data.
+
+## Documentation References
+
+- `README.md` - Quick start, API examples, troubleshooting
+- `ADMIN.md` - Complete administration and operations guide
+- `docs/UNSIGNED_UPLOAD_TECHNICAL_BRIEF.md` - Detailed unsigned upload implementation
+- `.env.sample` - All environment variables with descriptions
