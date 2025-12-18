@@ -284,11 +284,38 @@ X402_PAYMENT_TIMEOUT_MS=300000      # 5 minutes
 **Multi-Facilitator Fallback**:
 The bundler supports automatic fallback between multiple facilitators. Facilitators are tried sequentially in the order specified until one succeeds.
 
+**Network Enable/Disable**:
+
+Each network must be explicitly enabled. Only Base mainnet is enabled by default.
+
+```bash
+# Network Enable/Disable Variables
+X402_BASE_ENABLED=true              # Base mainnet (default: true)
+X402_BASE_TESTNET_ENABLED=false     # Base Sepolia testnet (default: false)
+X402_ETH_ENABLED=false              # Ethereum mainnet (default: false)
+X402_POLYGON_ENABLED=false          # Polygon mainnet (default: false)
+```
+
+**⚠️ Important**: Setting a network's facilitator URL does NOT enable it. You must explicitly set `X402_<NETWORK>_ENABLED=true`.
+
+**For testnet development (Base Sepolia)**:
+```bash
+# Enable Base Sepolia, disable mainnet
+X402_BASE_TESTNET_ENABLED=true
+X402_BASE_ENABLED=false
+
+# No CDP credentials needed for testnet!
+# Uses Mogami facilitator by default
+```
+
 **Networks Supported**:
-- **Base Sepolia (testnet)** - Default: Mogami (no CDP needed)
-- **Base Mainnet** - Default: Coinbase (primary) → Mogami (fallback)
-- **Ethereum Mainnet** - No default (must configure if enabled)
-- **Polygon Mainnet** - No default (must configure if enabled)
+
+| Network | Enable Variable | Default | CDP Required | Default Facilitator |
+|---------|-----------------|---------|--------------|---------------------|
+| Base Mainnet | `X402_BASE_ENABLED` | `true` | Yes | Coinbase → Mogami |
+| Base Sepolia | `X402_BASE_TESTNET_ENABLED` | `false` | No | Mogami |
+| Ethereum | `X402_ETH_ENABLED` | `false` | Depends | Must configure |
+| Polygon | `X402_POLYGON_ENABLED` | `false` | Depends | Must configure |
 
 **Facilitator Configuration Examples**:
 
@@ -1210,6 +1237,8 @@ pm2 restart all
 ---
 
 ## Troubleshooting
+
+> **📘 Local Testing?** See the [Local Testing Guide](./README.md#local-testing-guide) in the README for quick setup with Base Sepolia testnet, free uploads, and localhost considerations.
 
 ### Build and Configuration Issues
 

@@ -25,8 +25,9 @@ yarn admin          # Admin dashboard (port 3002)
 yarn test                              # All tests
 yarn test:unit                         # Unit tests only
 yarn test:integration                  # Integration tests (requires Docker)
-yarn test:unit --grep "test name"      # Run single test by name
-yarn typecheck                         # Type checking
+yarn test:unit --grep "pattern"        # Run tests matching pattern (case-sensitive)
+yarn test:unit --grep "x402"           # Example: run all x402-related tests
+yarn typecheck                         # Type checking (strict mode enabled)
 ```
 
 ### Code Quality
@@ -116,11 +117,18 @@ The entire architecture uses a central `Architecture` interface (`src/arch/archi
 - `X402PricingOracle` (`src/x402/x402PricingOracle.ts`) - Converts Winston (AR pricing) to USDC atomic units
 
 **Payment Flow**:
-1. **Get Price Quote** - POST without `X-PAYMENT` header returns 402 with payment requirements
-2. **Create Payment** - Client creates EIP-712 USDC transfer signature
-3. **Submit with Payment** - POST with `X-PAYMENT` header (base64-encoded JSON)
-4. **Settlement** - Facilitator executes `transferWithAuthorization` on USDC contract
-5. **Fraud Detection** - Byte count verification with ±5% tolerance
+1. **Check Free Eligibility** - If upload size ≤ `FREE_UPLOAD_LIMIT`, no payment required
+2. **Get Price Quote** - POST without `X-PAYMENT` header returns 402 with payment requirements
+3. **Create Payment** - Client creates EIP-712 USDC transfer signature
+4. **Submit with Payment** - POST with `X-PAYMENT` header (base64-encoded JSON)
+5. **Settlement** - Facilitator executes `transferWithAuthorization` on USDC contract
+6. **Fraud Detection** - Byte count verification with ±5% tolerance
+
+**Free Upload Flow** (when `FREE_UPLOAD_LIMIT > 0`):
+1. Client calls `GET /v1/info` to discover `freeUploadLimitBytes`
+2. If upload size ≤ `freeUploadLimitBytes`, client uploads without `X-PAYMENT` header
+3. Response includes `freeUpload: true` to confirm free tier was used
+4. If upload size > limit, returns 402 with payment requirements
 
 **Payment Mode**: `payg` (pay-as-you-go) - pay only for each upload, no account balances.
 
@@ -137,7 +145,7 @@ The bundler supports two upload modes:
 **Unsigned Uploads** (`/v1/x402/upload/unsigned`):
 - Client sends raw data + optional tags
 - Server creates and signs ANS-104 data item using `RAW_DATA_ITEM_JWK_FILE` wallet
-- ALWAYS requires x402 payment (no whitelist exemption)
+- Supports free uploads if size ≤ `FREE_UPLOAD_LIMIT` (no whitelist exemption)
 - Supports binary upload with `X-Tag-*` headers or JSON envelope format
 - See `docs/UNSIGNED_UPLOAD_TECHNICAL_BRIEF.md` for implementation details
 
@@ -186,6 +194,11 @@ Upload → new-data-item → plan-bundle → prepare-bundle → post-bundle → 
 - Job retry with exponential backoff
 - Configuration in `src/arch/queues/config.ts`
 - Worker concurrency tunable via `WORKER_CONCURRENCY_*` env vars (see `.env.sample`)
+
+**Storage Cleanup**:
+- `cleanup-fs` job runs on cron schedule (default: daily at 2 AM UTC)
+- Tiered cleanup: filesystem (7 days), MinIO (90 days), Arweave (permanent)
+- Configure via `FILESYSTEM_CLEANUP_DAYS`, `MINIO_CLEANUP_DAYS`, `CLEANUP_CRON`
 
 ### Bundle Packing Strategy
 
@@ -300,6 +313,7 @@ All routes support both root and `/v1` prefix (e.g., `/tx` and `/v1/tx`).
 - `GET /v1/info` - Service info
 - `GET /health` - Health check
 - `GET /bundler_metrics` - Prometheus metrics
+- `GET /api-docs` - Swagger UI (interactive API documentation)
 
 ### Route Handlers (`src/routes/`)
 - `dataItemPost.ts` - Upload handlers (`signedDataItemRoute`, `unsignedDataItemRoute`, `dataItemRoute`)
@@ -340,10 +354,11 @@ All job handlers named by type: `plan.ts`, `prepare.ts`, `post.ts`, `verify.ts`,
 - Uncaught exceptions logged and counted
 
 ### Testing
-- Unit tests colocated with source: `*.test.ts` files in `src/`
+- Unit tests colocated with source: `*.test.ts` files in `src/` (e.g., `bundlePacker.test.ts` next to `bundlePacker.ts`)
 - Integration tests in `tests/` directory
 - Mocha + Chai for assertions
 - Tests require ts-node for TypeScript execution
+- Run single test: `yarn test:unit --grep "pattern"` (case-sensitive regex match on test description)
 
 ### Migrations
 - Knex migrations in `src/migrations/` (TypeScript)
@@ -351,6 +366,8 @@ All job handlers named by type: `plan.ts`, `prepare.ts`, `post.ts`, `verify.ts`,
 - Migrations compile to `lib/migrations/*.js`
 - Run on startup if `MIGRATE_ON_STARTUP=true`
 - **Important**: Only load `.js` migration files (TypeScript files are excluded via filter)
+- Create new migration: `yarn db:migrate:new migration_name` (creates TypeScript file in `src/migrations/`)
+- Always `yarn build` before `yarn db:migrate` (migrations run from compiled `lib/` directory)
 
 ## Common Issues
 
@@ -379,7 +396,8 @@ All job handlers named by type: `plan.ts`, `prepare.ts`, `post.ts`, `verify.ts`,
 
 ### x402-Specific Considerations
 - This bundler is **x402-only** - no traditional payment service or account balances
-- All uploads require x402 payment (no free uploads except within `FREE_UPLOAD_LIMIT`)
+- Uploads ≤ `FREE_UPLOAD_LIMIT` are free; larger uploads require x402 payment
+- Default `FREE_UPLOAD_LIMIT=0` in docker-compose.yml means all uploads require payment
 - Facilitator URLs differ: testnet uses public facilitator, mainnet requires CDP credentials
 - USDC has 6 decimals; pricing oracle converts from Winston (12 decimals)
 
@@ -403,9 +421,16 @@ Two separate Redis instances:
 
 This separation prevents cache eviction from affecting job queue data.
 
+## TypeScript Configuration
+
+- **Strict mode enabled** - All strict checks are on (`strict: true` in tsconfig.json)
+- **Target**: ES2022 with CommonJS module output
+- **Output**: Compiled to `lib/` directory
+- **Path aliases**: None - use relative imports
+
 ## Documentation References
 
 - `README.md` - Quick start, API examples, troubleshooting
-- `ADMIN.md` - Complete administration and operations guide
+- `ADMIN.md` - Complete administration and operations guide (deployment, monitoring, scaling, storage management)
 - `docs/UNSIGNED_UPLOAD_TECHNICAL_BRIEF.md` - Detailed unsigned upload implementation
 - `.env.sample` - All environment variables with descriptions

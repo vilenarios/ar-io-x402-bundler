@@ -59,13 +59,25 @@ ADMIN_PASSWORD=your-secure-password
 
 ### x402 Network Configuration
 
+Each network must be explicitly enabled. By default, only Base mainnet is enabled.
+
 ```bash
-# Base mainnet (default) - requires CDP credentials
+# Network Enable/Disable (set to "true" or "false")
+X402_BASE_ENABLED=true              # Base mainnet (default: true)
+X402_BASE_TESTNET_ENABLED=false     # Base Sepolia testnet (default: false)
+X402_ETH_ENABLED=false              # Ethereum mainnet (default: false)
+X402_POLYGON_ENABLED=false          # Polygon mainnet (default: false)
+
+# CDP Credentials (required for Base mainnet, not needed for testnet)
 CDP_API_KEY_ID=your-cdp-key-id
 CDP_API_KEY_SECRET=your-cdp-secret
+```
 
-# Base Sepolia testnet - works without CDP credentials
-X402_BASE_TESTNET_ENABLED=true
+**For testnet development (Base Sepolia):**
+```bash
+X402_BASE_TESTNET_ENABLED=true      # Enable testnet
+X402_BASE_ENABLED=false             # Disable mainnet (optional)
+# No CDP credentials needed for testnet!
 ```
 
 See [.env.sample](./.env.sample) for all configuration options.
@@ -153,6 +165,90 @@ yarn dev                # Development mode with hot reload
 ```bash
 yarn docker:up && yarn build && yarn db:migrate
 pm2 start ecosystem.config.js
+```
+
+## Local Testing Guide
+
+### Quick Setup for Local Testing
+
+```bash
+# Add to your .env:
+X402_BASE_TESTNET_ENABLED=true          # Enable Base Sepolia testnet
+X402_BASE_ENABLED=false                 # Disable mainnet (optional)
+UPLOAD_SERVICE_PUBLIC_URL=http://localhost:3001  # Default, explicit for clarity
+
+# Optional: Enable free uploads to skip payment during testing
+FREE_UPLOAD_LIMIT=1000000               # 1MB free (0 = require payment for all)
+
+# Optional: Disable optical bridging if no local gateway
+OPTICAL_BRIDGING_ENABLED=false
+```
+
+### Important Considerations
+
+#### 1. Arweave Wallet Needs AR Balance
+
+Even with testnet x402 payments, bundles are posted to **mainnet Arweave**. Your wallet needs AR:
+
+```bash
+# Check wallet balance (get address first)
+arweave-key-tool info wallet.json
+curl https://arweave.net/wallet/<YOUR_ADDRESS>/balance
+```
+
+If empty, bundles will fail at the `post-bundle` stage.
+
+#### 2. `UPLOAD_SERVICE_PUBLIC_URL` Must Match Client
+
+The x402 payment signature includes a `resource` URL. Client and bundler must agree:
+
+```bash
+# Bundler expects (from UPLOAD_SERVICE_PUBLIC_URL):
+http://localhost:3001/v1/x402/upload/signed
+
+# Client must sign payment for the SAME URL
+# If these don't match, payment verification fails
+```
+
+**For localhost testing**, the default `http://localhost:3001` works fine - the facilitator does NOT call back to this URL, it's only for signature verification.
+
+#### 3. Optical Bridging with Local Gateway
+
+If testing with a local AR.IO gateway, use the host's IP (not `localhost`):
+
+```bash
+# From Docker, localhost = the container, not your machine
+# Use your machine's LAN IP:
+OPTICAL_BRIDGE_URL=http://192.168.1.100:3000/ar-io/admin/queue-data-item
+
+# Or disable if not using a gateway:
+OPTICAL_BRIDGING_ENABLED=false
+```
+
+#### 4. Free Upload Limit for Quick Testing
+
+To test uploads without x402 payments:
+
+```bash
+FREE_UPLOAD_LIMIT=1000000    # Uploads under 1MB are free
+```
+
+Set back to `0` for production.
+
+### Verify Your Setup
+
+```bash
+# 1. Health check
+curl http://localhost:3001/health
+
+# 2. Check enabled networks (should show base-sepolia)
+curl http://localhost:3001/v1/info | jq '.x402'
+
+# 3. Get price quote
+curl "http://localhost:3001/v1/price/x402/data-item/arweave/1024"
+
+# 4. Check admin dashboard
+open http://localhost:3002/admin/dashboard
 ```
 
 ## Architecture
